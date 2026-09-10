@@ -19,6 +19,10 @@ Donanım blokları (`FBROTATE`, `BACKLIGHT`, `BATTERY`, `TEMP_SENSOR`) elle değ
 
 ## Kurulum (Kindle'da)
 
+> **Önce repo'yu public yap.** Şu an private; `raw.githubusercontent.com` private repo'ya token'sız 404 döner, yani Kindle indiremez.
+> GitHub → repo → Settings → General → en altta Danger Zone → Change visibility → Public.
+> Public yapmak istemiyorsan alternatif: dosyaları bir gist'e koy, ya da USB ile `/mnt/us/extensions/clock` altına elle kopyala.
+
 kTerm açıkken:
 
 ```sh
