@@ -40,15 +40,12 @@ koreader'ın `KindlePaperWhite4:init()` tanımından alındı:
 | `BATTERY` | `/sys/class/power_supply/bd71827_bat/capacity` |
 | `BACKLIGHT` | `/sys/class/backlight/bl/brightness` |
 | `FBROTATE_PATH` | `/sys/class/graphics/fb0/rotate` |
-| iç sıcaklık | `/sys/class/power_supply/bd71827_bat/temp` (pil sensörü) |
 | DPI | 300 |
 | çözünürlük | 1072x1448 (dikey), yatayda 1448x1072 |
 
 **Dikkat:** PW4'te pil dosyasının adı `capacity`; eski Kindle'lardaki `battery_capacity` **yok**. Yani `find /sys -name battery_capacity` PW4'te boş döner — doğru komut `ls /sys/class/power_supply/*/capacity`. `sh i.sh --probe` ikisine de bakıyor.
 
-**İç sıcaklık.** PW4 *panel* sıcaklığını sysfs yerine bir ioctl üzerinden veriyor, yani eski Kindle'lardaki `papyrus_temperature` dosyasının karşılığı yok. Onun yerine pil sensörü (`bd71827_bat/temp`) kullanılıyor — gerçek PW4'te çalıştığı doğrulandı. Ama bu oda sıcaklığı değil, cihazın gövde sıcaklığı: ortamdan birkaç derece yüksek okur, şarjdayken daha da fazla. Okunamazsa iç sıcaklık hiç gösterilmiyor, dış sıcaklık yine görünür. Birim otomatik normalize ediliyor (milli/desi/tam santigrat).
-
-Alt satırdaki iki değer: **sol = dışarısı** (wttr.in), **sağ = cihaz** (pil sensörü).
+**Cihaz sıcaklığı yok.** Upstream alt satırda dış sıcaklığın yanında bir de cihazın kendi sensörünü gösteriyordu. PW4'te bu ancak pil sensöründen okunabiliyor (panel sensörü sysfs'te yok) ve odayı değil cihazın gövdesini ölçtüğü için kaldırıldı. Alt satırda artık sadece dış sıcaklık var.
 
 Diğer modellerin blokları dosyanın başında yorum satırı olarak duruyor. Ayrıca yollardan biri tutmazsa script çakılmak yerine cihazdan doğrusunu arıyor, `fbink` ve font için de alternatifler deniyor, `rtcwake` için `rtc1` yoksa `rtc0` kullanıyor.
 
@@ -71,7 +68,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | ntp | `de.pool.ntp.org` | `pool.ntp.org` |
 | donanım | sabit PW2 yolları | PW4 yolları + otomatik fallback |
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
-| iç sıcaklık | `cat` (yoksa patlar) | opsiyonel, birim normalize |
+| iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
 
 ## Dosyalar
 

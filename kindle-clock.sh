@@ -20,19 +20,16 @@ ROTATE_VALUE=0
 #FBROTATE_PATH="" # uses /proc/eink_fb/update_display, see below
 #BACKLIGHT="/dev/null"
 #BATTERY="/sys/devices/system/yoshi_battery/yoshi_battery0/battery_capacity"
-#TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0048/papyrus_temperature"
 
 #PW2
 #FBROTATE_PATH="/sys/devices/platform/mxc_epdc_fb/graphics/fb0/rotate"
 #BACKLIGHT="/sys/devices/system/fl_tps6116x/fl_tps6116x0/fl_intensity"
 #BATTERY="/sys/devices/system/yoshi_battery/yoshi_battery0/battery_capacity"
-#TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0068/papyrus_temperature"
 
 #PW3
 #FBROTATE_PATH="/sys/devices/platform/imx_epdc_fb/graphics/fb0/rotate"
 #BACKLIGHT="/sys/devices/platform/imx-i2c.0/i2c-0/0-003c/max77696-bl.0/backlight/max77696-bl/brightness"
 #BATTERY="/sys/devices/system/wario_battery/wario_battery0/battery_capacity"
-#TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0068/papyrus_temperature"
 
 #PW4 (Rex / Moonshine, 1072x1448 @ 300dpi)
 ### Paths taken from koreader's KindlePaperWhite4:init(). Note that the
@@ -40,13 +37,6 @@ ROTATE_VALUE=0
 FBROTATE_PATH="/sys/class/graphics/fb0/rotate"
 BACKLIGHT="/sys/class/backlight/bl/brightness"
 BATTERY="/sys/class/power_supply/bd71827_bat/capacity"
-### The PW4 exposes its *panel* temperature over an ioctl rather than sysfs,
-### so there is no equivalent of the papyrus_temperature node older kindles
-### have. The battery sensor below is confirmed working on a PW4, but note
-### that it measures the body of the device, not the room: it reads a few
-### degrees above ambient, and more than that while charging.
-TEMP_SENSOR="/sys/class/power_supply/bd71827_bat/temp"
-TEMP_SENSOR_ALT="/sys/devices/virtual/thermal/thermal_zone0/temp"
 
 ### Layout below is tuned against this canvas, in landscape. Everything is
 ### scaled to whatever fbink actually reports, so it survives a PW2 or a PW5.
@@ -74,23 +64,6 @@ update_weather() {
     fi
 }
 
-### Reads the inside temperature, normalising the unit. papyrus reports
-### plain celsius, power_supply and thermal nodes deci- or milli-celsius.
-read_inside_temp() {
-    [ -r "$TEMP_SENSOR" ] || return 1
-    RAW=$(cat "$TEMP_SENSOR" 2>/dev/null)
-    case "$RAW" in
-        ''|*[!0-9-]*) return 1 ;;
-    esac
-    if [ "$RAW" -gt 1000 ] || [ "$RAW" -lt -1000 ]; then
-        echo $((RAW / 1000))
-    elif [ "$RAW" -gt 100 ] || [ "$RAW" -lt -100 ]; then
-        echo $((RAW / 10))
-    else
-        echo "$RAW"
-    fi
-}
-
 clear_screen(){
     $FBINK -f -c
     $FBINK -f -c
@@ -112,13 +85,6 @@ if [ ! -r "$BATTERY" ]; then
 fi
 if [ ! -r "$BATTERY" ]; then
     BATTERY=$(find /sys -name battery_capacity 2>/dev/null | head -n 1)
-fi
-
-if [ ! -r "$TEMP_SENSOR" ]; then
-    TEMP_SENSOR="$TEMP_SENSOR_ALT"
-fi
-if [ ! -r "$TEMP_SENSOR" ]; then
-    TEMP_SENSOR=$(find /sys/devices -name 'papyrus_temperature' 2>/dev/null | head -n 1)
 fi
 
 if [ ! -w "$BACKLIGHT" ]; then
@@ -153,7 +119,7 @@ fi
 
 ### Prep Kindle...
 echo "`date '+%Y-%m-%d_%H:%M:%S'`: ------------- Startup ------------" >> $LOG
-echo "`date '+%Y-%m-%d_%H:%M:%S'`: fbink=$FBINK_BIN battery=$BATTERY temp=$TEMP_SENSOR backlight=$BACKLIGHT rtc=$RTC" >> $LOG
+echo "`date '+%Y-%m-%d_%H:%M:%S'`: fbink=$FBINK_BIN battery=$BATTERY backlight=$BACKLIGHT rtc=$RTC" >> $LOG
 
 ### No way of running this if wifi is down.
 if [ `lipc-get-prop com.lab126.wifid cmState` != "CONNECTED" ]; then
@@ -276,18 +242,13 @@ while true; do
     fi
     TIME=$(date '+%H:%M')
     DATE=$(date '+%A, %-d. %B %Y')
-    INSIDE_TEMP_C=$(read_inside_temp)
 
     ## coordinates are scaled from a PW4 landscape canvas (1448x1072)
     $FBINK -b -c -m -t $FONT,size=150,top=$TIME_TOP,bottom=0,left=0,right=0 "$TIME"
     $FBINK -b -m -t $FONT,size=20,top=$DATE_TOP,bottom=0,left=0,right=0 "$DATE"
     $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=$BAT_LEFT,right=0 "Bat: $BAT"
     $FBINK -b -m -t $FONT,size=20,top=$COND_TOP,bottom=0,left=0,right=0 "$COND"
-    if [ -n "$INSIDE_TEMP_C" ]; then
-        $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP | $INSIDE_TEMP_C°C"
-    else
-        $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
-    fi
+    $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
     if [ "$NOWIFI" = "1" ]; then
         $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=$WARN_LEFT,right=0 "No Wifi!"
     fi

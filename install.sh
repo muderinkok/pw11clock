@@ -43,7 +43,6 @@ probe() {
     ### PW4 and newer use power_supply/*/capacity; older kindles use
     ### the battery_capacity node, so look for both.
     echo "battery:    $(ls /sys/class/power_supply/*/capacity 2>/dev/null | tr '\n' ' ')$(find /sys -name battery_capacity 2>/dev/null | tr '\n' ' ')"
-    echo "temp:       $(ls /sys/class/power_supply/*/temp /sys/devices/virtual/thermal/thermal_zone*/temp 2>/dev/null | tr '\n' ' ')$(find /sys/devices -name 'papyrus_temperature' 2>/dev/null | tr '\n' ' ')"
     echo "backlight:  $(ls /sys/class/backlight/*/brightness 2>/dev/null | tr '\n' ' ')"
     echo "fb rotate:  $(ls /sys/class/graphics/fb0/rotate 2>/dev/null | tr '\n' ' ')(now: $(cat /sys/class/graphics/fb0/rotate 2>/dev/null))"
     echo "rtc:        $(ls /dev/rtc* 2>/dev/null | tr '\n' ' ')"
