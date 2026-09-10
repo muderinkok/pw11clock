@@ -3,82 +3,52 @@
 PWD=$(pwd)
 #LOG="/mnt/us/clock.log"
 LOG="/dev/null"
-FBINK="/mnt/us/koreader/fbink -q"
+FBINK_BIN="/mnt/us/koreader/fbink"
 FONT="regular=/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
 #FONT="regular=/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf"
 CITY="Istanbul"
 COND="---"
 TEMP="---"
 
+### The clock runs in landscape, which is what writing to the fb rotate
+### node achieves. If the screen comes up portrait, try 1, 2 or 3 here.
+ROTATE_VALUE=0
+
 ### uncomment/adjust according to your hardware
 #K4NT
-#FBROTATE=" echo 14 2 > /proc/eink_fb/update_display"
+#FBROTATE_PATH="" # uses /proc/eink_fb/update_display, see below
 #BACKLIGHT="/dev/null"
 #BATTERY="/sys/devices/system/yoshi_battery/yoshi_battery0/battery_capacity"
 #TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0048/papyrus_temperature"
 
+#PW2
+#FBROTATE_PATH="/sys/devices/platform/mxc_epdc_fb/graphics/fb0/rotate"
+#BACKLIGHT="/sys/devices/system/fl_tps6116x/fl_tps6116x0/fl_intensity"
+#BATTERY="/sys/devices/system/yoshi_battery/yoshi_battery0/battery_capacity"
+#TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0068/papyrus_temperature"
+
 #PW3
-#FBROTATE="echo 0 > /sys/devices/platform/imx_epdc_fb/graphics/fb0/rotate"
+#FBROTATE_PATH="/sys/devices/platform/imx_epdc_fb/graphics/fb0/rotate"
 #BACKLIGHT="/sys/devices/platform/imx-i2c.0/i2c-0/0-003c/max77696-bl.0/backlight/max77696-bl/brightness"
 #BATTERY="/sys/devices/system/wario_battery/wario_battery0/battery_capacity"
 #TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0068/papyrus_temperature"
 
-#PW2
-FBROTATE="echo -n 0 > /sys/devices/platform/mxc_epdc_fb/graphics/fb0/rotate"
-BACKLIGHT="/sys/devices/system/fl_tps6116x/fl_tps6116x0/fl_intensity"
-BATTERY="/sys/devices/system/yoshi_battery/yoshi_battery0/battery_capacity"
-TEMP_SENSOR="/sys/devices/virtual/i2c-adapter/i2c-1/1-0068/papyrus_temperature"
+#PW4 (Rex / Moonshine, 1072x1448 @ 300dpi)
+### Paths taken from koreader's KindlePaperWhite4:init(). Note that the
+### battery node is "capacity", not the "battery_capacity" older kindles use.
+FBROTATE_PATH="/sys/class/graphics/fb0/rotate"
+BACKLIGHT="/sys/class/backlight/bl/brightness"
+BATTERY="/sys/class/power_supply/bd71827_bat/capacity"
+### The PW4 exposes its panel temperature over an ioctl, not sysfs, so there
+### is no known good node here. These are guesses, checked at startup; if
+### none of them read back, the inside temperature is simply left off.
+TEMP_SENSOR="/sys/class/power_supply/bd71827_bat/temp"
+TEMP_SENSOR_ALT="/sys/devices/virtual/thermal/thermal_zone0/temp"
 
-### PW4/PW5 (and anything else): the hardcoded paths above only exist on a PW2.
-### Rather than guessing, fall back to whatever this device actually exposes.
-if [ ! -r "$BATTERY" ]; then
-    BATTERY=$(find /sys -name battery_capacity 2>/dev/null | head -n 1)
-fi
-if [ ! -r "$TEMP_SENSOR" ]; then
-    TEMP_SENSOR=$(find /sys/devices -name 'papyrus_temperature' 2>/dev/null | head -n 1)
-fi
-if [ ! -r "$TEMP_SENSOR" ]; then
-    TEMP_SENSOR=$(find /sys/devices -name '*_temperature' 2>/dev/null | head -n 1)
-fi
-if [ ! -w "$BACKLIGHT" ]; then
-    BACKLIGHT=$(ls /sys/class/backlight/*/brightness 2>/dev/null | head -n 1)
-fi
-if [ -z "$BACKLIGHT" ]; then
-    BACKLIGHT="/dev/null"
-fi
-if [ ! -w "/sys/devices/platform/mxc_epdc_fb/graphics/fb0/rotate" ]; then
-    if [ -w "/sys/class/graphics/fb0/rotate" ]; then
-        FBROTATE="echo -n 0 > /sys/class/graphics/fb0/rotate"
-    else
-        FBROTATE="true"
-    fi
-fi
-
-### fbink lives in different places depending on what is installed
-if [ ! -x "${FBINK%% *}" ]; then
-    for CANDIDATE in /mnt/us/koreader/fbink /mnt/us/extensions/MRInstaller/bin/K5/fbink /mnt/us/extensions/kterm/bin/fbink /usr/bin/fbink; do
-        if [ -x "$CANDIDATE" ]; then
-            FBINK="$CANDIDATE -q"
-            break
-        fi
-    done
-fi
-
-### fall back to a font that exists if the preferred one is missing
-if [ ! -r "${FONT#regular=}" ]; then
-    for CANDIDATE in /usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf /usr/java/lib/fonts/Palatino-Regular.ttf /usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf; do
-        if [ -r "$CANDIDATE" ]; then
-            FONT="regular=$CANDIDATE"
-            break
-        fi
-    done
-fi
-
-### rtc device used for the wakeup timer
-RTC="/dev/rtc1"
-if [ ! -e "$RTC" ]; then
-    RTC="/dev/rtc0"
-fi
+### Layout below is tuned against this canvas, in landscape. Everything is
+### scaled to whatever fbink actually reports, so it survives a PW2 or a PW5.
+REF_W=1448
+REF_H=1072
 
 wait_for_wifi() {
   return `lipc-get-prop com.lab126.wifid cmState | grep -e "CONNECTED" | wc -l`
@@ -92,7 +62,6 @@ update_weather() {
     if [ -z "$WEATHER" ]; then
         WEATHER=$(curl -s -f -m 5 http://wttr.in/$CITY?format="%C,+%t" )
     fi
-#     WEATHER=$(curl -v -s -f -m 5 https://wttr.in/$CITY?format="%C,+%t" 2>> $LOG)
     RC=$?
     echo "`date '+%Y-%m-%d_%H:%M:%S'`: Got weather data. ($WEATHER, RC=$RC)" >> $LOG
     if [ ! -z "$WEATHER" ]; then
@@ -102,20 +71,93 @@ update_weather() {
     fi
 }
 
+### Reads the inside temperature, normalising the unit. papyrus reports
+### plain celsius, power_supply and thermal nodes deci- or milli-celsius.
+read_inside_temp() {
+    [ -r "$TEMP_SENSOR" ] || return 1
+    RAW=$(cat "$TEMP_SENSOR" 2>/dev/null)
+    case "$RAW" in
+        ''|*[!0-9-]*) return 1 ;;
+    esac
+    if [ "$RAW" -gt 1000 ] || [ "$RAW" -lt -1000 ]; then
+        echo $((RAW / 1000))
+    elif [ "$RAW" -gt 100 ] || [ "$RAW" -lt -100 ]; then
+        echo $((RAW / 10))
+    else
+        echo "$RAW"
+    fi
+}
+
 clear_screen(){
     $FBINK -f -c
     $FBINK -f -c
 }
 
+### Fall back to whatever this device exposes if a path above is wrong.
+if [ ! -x "$FBINK_BIN" ]; then
+    for CANDIDATE in /mnt/us/koreader/fbink /mnt/us/extensions/MRInstaller/bin/K5/fbink /mnt/us/extensions/kterm/bin/fbink /usr/bin/fbink; do
+        if [ -x "$CANDIDATE" ]; then
+            FBINK_BIN="$CANDIDATE"
+            break
+        fi
+    done
+fi
+FBINK="$FBINK_BIN -q"
+
+if [ ! -r "$BATTERY" ]; then
+    BATTERY=$(ls /sys/class/power_supply/*/capacity 2>/dev/null | head -n 1)
+fi
+if [ ! -r "$BATTERY" ]; then
+    BATTERY=$(find /sys -name battery_capacity 2>/dev/null | head -n 1)
+fi
+
+if [ ! -r "$TEMP_SENSOR" ]; then
+    TEMP_SENSOR="$TEMP_SENSOR_ALT"
+fi
+if [ ! -r "$TEMP_SENSOR" ]; then
+    TEMP_SENSOR=$(find /sys/devices -name 'papyrus_temperature' 2>/dev/null | head -n 1)
+fi
+
+if [ ! -w "$BACKLIGHT" ]; then
+    BACKLIGHT=$(ls /sys/class/backlight/*/brightness 2>/dev/null | head -n 1)
+fi
+if [ -z "$BACKLIGHT" ]; then
+    BACKLIGHT="/dev/null"
+fi
+
+if [ ! -w "$FBROTATE_PATH" ]; then
+    FBROTATE_PATH="/sys/class/graphics/fb0/rotate"
+fi
+if [ -w "$FBROTATE_PATH" ]; then
+    FBROTATE="echo -n $ROTATE_VALUE > $FBROTATE_PATH"
+else
+    FBROTATE="true"
+fi
+
+if [ ! -r "${FONT#regular=}" ]; then
+    for CANDIDATE in /usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf /usr/java/lib/fonts/Palatino-Regular.ttf /usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf; do
+        if [ -r "$CANDIDATE" ]; then
+            FONT="regular=$CANDIDATE"
+            break
+        fi
+    done
+fi
+
+RTC="/dev/rtc1"
+if [ ! -e "$RTC" ]; then
+    RTC="/dev/rtc0"
+fi
+
 ### Prep Kindle...
 echo "`date '+%Y-%m-%d_%H:%M:%S'`: ------------- Startup ------------" >> $LOG
+echo "`date '+%Y-%m-%d_%H:%M:%S'`: fbink=$FBINK_BIN battery=$BATTERY temp=$TEMP_SENSOR backlight=$BACKLIGHT rtc=$RTC" >> $LOG
 
 ### No way of running this if wifi is down.
 if [ `lipc-get-prop com.lab126.wifid cmState` != "CONNECTED" ]; then
 	exit 1
 fi
 
-$FBINK -w -c -f -m -t $FONT,size=20,top=410,bottom=0,left=0,right=0 "Starting Clock..." > /dev/null 2>&1
+$FBINK -w -c -f -m -M -t $FONT,size=20 "Starting Clock..." > /dev/null 2>&1
 
 
 ### stop processes that we don't need
@@ -130,7 +172,7 @@ $FBINK -w -c -f -m -t $FONT,size=20,top=410,bottom=0,left=0,right=0 "Starting Cl
 #/etc/init.d/lipc-daemon stop
 #/etc/init.d/powerd stop
 
-#PW2/3
+#PW2/3/4
 stop lab126_gui
 stop otaupd
 stop phd
@@ -143,6 +185,23 @@ sleep 2
 
 ### turn off 270 degree rotation of framebuffer device
 eval $FBROTATE
+
+### Ask fbink what we ended up with and scale the layout to it.
+FBSTATE=$($FBINK_BIN -e 2>/dev/null)
+SCREEN_W=$(echo "$FBSTATE" | sed -n 's/.*viewWidth=\([0-9][0-9]*\).*/\1/p')
+SCREEN_H=$(echo "$FBSTATE" | sed -n 's/.*viewHeight=\([0-9][0-9]*\).*/\1/p')
+[ -n "$SCREEN_W" ] || SCREEN_W=$REF_W
+[ -n "$SCREEN_H" ] || SCREEN_H=$REF_H
+echo "`date '+%Y-%m-%d_%H:%M:%S'`: screen ${SCREEN_W}x${SCREEN_H} ($FBSTATE)" >> $LOG
+
+### Font sizes stay in points: fbink scales pt by the panel's dpi, so they
+### already track the device. Only the pixel margins need scaling.
+TIME_TOP=$((14 * SCREEN_H / REF_H))
+DATE_TOP=$((580 * SCREEN_H / REF_H))
+COND_TOP=$((721 * SCREEN_H / REF_H))
+TEMP_TOP=$((849 * SCREEN_H / REF_H))
+BAT_LEFT=$((1248 * SCREEN_W / REF_W))
+WARN_LEFT=$((70 * SCREEN_W / REF_W))
 
 ### Set lowest cpu clock
 echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
@@ -214,25 +273,20 @@ while true; do
     fi
     TIME=$(date '+%H:%M')
     DATE=$(date '+%A, %-d. %B %Y')
-    INSIDE_TEMP_C=""
-    if [ -r "$TEMP_SENSOR" ]; then
-        INSIDE_TEMP_C=$(cat $TEMP_SENSOR)
-    fi
-    # convert to centigrade
-    #let INSIDE_TEMP_C="($INSIDE_TEMP_F-32)*5/9"
+    INSIDE_TEMP_C=$(read_inside_temp)
 
-    ## adjust coordinates according to display resolution. This is for PW2.
-    $FBINK -b -c -m -t $FONT,size=150,top=10,bottom=0,left=0,right=0 "$TIME"
-    $FBINK -b -m -t $FONT,size=20,top=410,bottom=0,left=0,right=0 "$DATE"
-    $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=900,right=0 "Bat: $BAT"
-    $FBINK -b -m -t $FONT,size=20,top=510,bottom=0,left=0,right=0 "$COND"
+    ## coordinates are scaled from a PW4 landscape canvas (1448x1072)
+    $FBINK -b -c -m -t $FONT,size=150,top=$TIME_TOP,bottom=0,left=0,right=0 "$TIME"
+    $FBINK -b -m -t $FONT,size=20,top=$DATE_TOP,bottom=0,left=0,right=0 "$DATE"
+    $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=$BAT_LEFT,right=0 "Bat: $BAT"
+    $FBINK -b -m -t $FONT,size=20,top=$COND_TOP,bottom=0,left=0,right=0 "$COND"
     if [ -n "$INSIDE_TEMP_C" ]; then
-        $FBINK -b -m -t $FONT,size=30,top=600,bottom=0,left=0,right=0 "$TEMP | $INSIDE_TEMP_C°C"
+        $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP | $INSIDE_TEMP_C°C"
     else
-        $FBINK -b -m -t $FONT,size=30,top=600,bottom=0,left=0,right=0 "$TEMP"
+        $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
     fi
     if [ "$NOWIFI" = "1" ]; then
-        $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=50,right=0 "No Wifi!"
+        $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=$WARN_LEFT,right=0 "No Wifi!"
     fi
     ### update framebuffer
     $FBINK -w -s

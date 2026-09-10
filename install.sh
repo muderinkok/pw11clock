@@ -37,15 +37,20 @@ done
 ### for a device the upstream script does not know about.
 probe() {
     echo "--- pw11clock hardware probe ---"
-    echo "model:      `cat /proc/usid 2>/dev/null` `cat /etc/prettyversion.txt 2>/dev/null`"
-    echo "battery:    `find /sys -name battery_capacity 2>/dev/null | tr '\n' ' '`"
-    echo "temp:       `find /sys/devices -name '*_temperature' 2>/dev/null | tr '\n' ' '`"
-    echo "backlight:  `ls /sys/class/backlight/*/brightness 2>/dev/null | tr '\n' ' '`"
-    echo "fb rotate:  `ls /sys/class/graphics/fb0/rotate /sys/devices/platform/*_fb*/graphics/fb0/rotate 2>/dev/null | tr '\n' ' '`"
-    echo "rtc:        `ls /dev/rtc* 2>/dev/null | tr '\n' ' '`"
-    echo "fbink:      `ls /mnt/us/koreader/fbink /mnt/us/extensions/MRInstaller/bin/K5/fbink /mnt/us/extensions/kterm/bin/fbink /usr/bin/fbink 2>/dev/null | tr '\n' ' '`"
-    echo "fonts:      `ls /usr/java/lib/fonts/ 2>/dev/null | tr '\n' ' '`"
-    echo "screen:     `cat /sys/class/graphics/fb0/virtual_size 2>/dev/null`"
+    echo "version:    $(cat /etc/prettyversion.txt 2>/dev/null)"
+    ### PW4 and newer use power_supply/*/capacity; older kindles use
+    ### the battery_capacity node, so look for both.
+    echo "battery:    $(ls /sys/class/power_supply/*/capacity 2>/dev/null | tr '\n' ' ')$(find /sys -name battery_capacity 2>/dev/null | tr '\n' ' ')"
+    echo "temp:       $(ls /sys/class/power_supply/*/temp /sys/devices/virtual/thermal/thermal_zone*/temp 2>/dev/null | tr '\n' ' ')$(find /sys/devices -name 'papyrus_temperature' 2>/dev/null | tr '\n' ' ')"
+    echo "backlight:  $(ls /sys/class/backlight/*/brightness 2>/dev/null | tr '\n' ' ')"
+    echo "fb rotate:  $(ls /sys/class/graphics/fb0/rotate 2>/dev/null | tr '\n' ' ')(now: $(cat /sys/class/graphics/fb0/rotate 2>/dev/null))"
+    echo "rtc:        $(ls /dev/rtc* 2>/dev/null | tr '\n' ' ')"
+    echo "fonts:      $(ls /usr/java/lib/fonts/ 2>/dev/null | tr '\n' ' ')"
+    FBINK_BIN=$(ls /mnt/us/koreader/fbink /mnt/us/extensions/MRInstaller/bin/K5/fbink /mnt/us/extensions/kterm/bin/fbink /usr/bin/fbink 2>/dev/null | head -n 1)
+    echo "fbink:      ${FBINK_BIN:-NOT FOUND}"
+    if [ -x "$FBINK_BIN" ]; then
+        echo "screen:     $("$FBINK_BIN" -e 2>/dev/null | tr ';' '\n' | grep -e '^viewWidth=' -e '^viewHeight=' -e '^DPI=' -e '^deviceName=' -e '^deviceCodename=' | tr '\n' ' ')"
+    fi
     echo "--- end of probe ---"
 }
 
