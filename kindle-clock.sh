@@ -11,7 +11,8 @@ COND="---"
 TEMP="---"
 
 ### The clock runs in landscape, which is what writing to the fb rotate
-### node achieves. If the screen comes up portrait, try 1, 2 or 3 here.
+### node achieves. 0 is confirmed to give landscape on a PW4; if some other
+### device comes up portrait, try 1, 2 or 3 here.
 ROTATE_VALUE=0
 
 ### uncomment/adjust according to your hardware
@@ -39,9 +40,11 @@ ROTATE_VALUE=0
 FBROTATE_PATH="/sys/class/graphics/fb0/rotate"
 BACKLIGHT="/sys/class/backlight/bl/brightness"
 BATTERY="/sys/class/power_supply/bd71827_bat/capacity"
-### The PW4 exposes its panel temperature over an ioctl, not sysfs, so there
-### is no known good node here. These are guesses, checked at startup; if
-### none of them read back, the inside temperature is simply left off.
+### The PW4 exposes its *panel* temperature over an ioctl rather than sysfs,
+### so there is no equivalent of the papyrus_temperature node older kindles
+### have. The battery sensor below is confirmed working on a PW4, but note
+### that it measures the body of the device, not the room: it reads a few
+### degrees above ambient, and more than that while charging.
 TEMP_SENSOR="/sys/class/power_supply/bd71827_bat/temp"
 TEMP_SENSOR_ALT="/sys/devices/virtual/thermal/thermal_zone0/temp"
 

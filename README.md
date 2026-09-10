@@ -40,12 +40,15 @@ koreader'ın `KindlePaperWhite4:init()` tanımından alındı:
 | `BATTERY` | `/sys/class/power_supply/bd71827_bat/capacity` |
 | `BACKLIGHT` | `/sys/class/backlight/bl/brightness` |
 | `FBROTATE_PATH` | `/sys/class/graphics/fb0/rotate` |
+| iç sıcaklık | `/sys/class/power_supply/bd71827_bat/temp` (pil sensörü) |
 | DPI | 300 |
 | çözünürlük | 1072x1448 (dikey), yatayda 1448x1072 |
 
 **Dikkat:** PW4'te pil dosyasının adı `capacity`; eski Kindle'lardaki `battery_capacity` **yok**. Yani `find /sys -name battery_capacity` PW4'te boş döner — doğru komut `ls /sys/class/power_supply/*/capacity`. `sh i.sh --probe` ikisine de bakıyor.
 
-**İç sıcaklık belirsiz.** PW4 panel sıcaklığını sysfs yerine bir ioctl üzerinden veriyor, bilinen sağlam bir dosya yok. Script önce `bd71827_bat/temp`, sonra `thermal_zone0/temp`, sonra `papyrus_temperature` deniyor; hiçbiri okunmazsa iç sıcaklığı hiç göstermiyor (dış sıcaklık yine görünür). Okunan değerin birimi de otomatik normalize ediliyor (milli/desi/tam santigrat).
+**İç sıcaklık.** PW4 *panel* sıcaklığını sysfs yerine bir ioctl üzerinden veriyor, yani eski Kindle'lardaki `papyrus_temperature` dosyasının karşılığı yok. Onun yerine pil sensörü (`bd71827_bat/temp`) kullanılıyor — gerçek PW4'te çalıştığı doğrulandı. Ama bu oda sıcaklığı değil, cihazın gövde sıcaklığı: ortamdan birkaç derece yüksek okur, şarjdayken daha da fazla. Okunamazsa iç sıcaklık hiç gösterilmiyor, dış sıcaklık yine görünür. Birim otomatik normalize ediliyor (milli/desi/tam santigrat).
+
+Alt satırdaki iki değer: **sol = dışarısı** (wttr.in), **sağ = cihaz** (pil sensörü).
 
 Diğer modellerin blokları dosyanın başında yorum satırı olarak duruyor. Ayrıca yollardan biri tutmazsa script çakılmak yerine cihazdan doğrusunu arıyor, `fbink` ve font için de alternatifler deniyor, `rtcwake` için `rtc1` yoksa `rtc0` kullanıyor.
 
@@ -55,7 +58,7 @@ Koordinatlar PW4 yatay tuvaline (1448x1072) göre yazıldı, ama açılışta `f
 
 Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'ıyla piksele çeviriyor (`px = dpi/72 * pt`), yani PW2'nin 212 DPI'ından PW4'ün 300 DPI'ına zaten kendiliğinden ölçekleniyor. Sadece piksel cinsinden olan `top=` / `left=` kenar boşlukları ölçekleniyor.
 
-Ekran dikey açılırsa `kindle-clock.sh` başındaki `ROTATE_VALUE` değerini 1, 2 veya 3 yap.
+`ROTATE_VALUE=0`'ın PW4'te yatay verdiği gerçek cihazda doğrulandı. Başka bir modelde ekran dikey açılırsa `kindle-clock.sh` başındaki bu değeri 1, 2 veya 3 yap.
 
 ## Upstream'e göre farklar
 
