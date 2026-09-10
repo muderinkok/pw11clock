@@ -8,15 +8,13 @@ Ekran **yatay** kullanılıyor (upstream'deki gibi) — tuval PW4'te 1448x1072.
 
 ## Kurulum (Kindle'da)
 
-kTerm açıkken:
+kTerm açıkken tek satır:
 
 ```sh
-cd /mnt/us
-curl -L -o i.sh https://raw.githubusercontent.com/muderinkok/pw11clock/refs/heads/claude/kindle-clock-setup-d39f1z/install.sh
-sh i.sh
+cd /mnt/us && curl -L -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh && sh i.sh
 ```
 
-Link uzunsa is.gd / tinyurl gibi bir kısaltıcıdan geçirip Kindle'a onu yaz.
+`HEAD` repo'nun default branch'ine çözülüyor, o yüzden link kısa ve branch adı değişse bile ölmüyor.
 
 `install.sh` şunları yapar: `/mnt/us/extensions/clock` klasörünü açar, `kindle-clock.sh` + `config.xml` + `menu.json` dosyalarını indirir, `chmod +x` yapar, donanım yollarını ekrana basar ve onay isteyip saati başlatır.
 
@@ -24,6 +22,7 @@ Link uzunsa is.gd / tinyurl gibi bir kısaltıcıdan geçirip Kindle'a onu yaz.
 sh i.sh -y        # sormadan kur ve başlat
 sh i.sh -n        # sadece kur, başlatma
 sh i.sh --probe   # hiçbir şey kurma, sadece bu cihazın donanım yollarını yazdır
+REF=main sh i.sh  # başka bir branch/tag'den kur
 ```
 
 Kurulumdan sonra saat KUAL'de **Clock** olarak da görünür.

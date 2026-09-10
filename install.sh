@@ -4,7 +4,7 @@
 #
 # On the kindle (kTerm / ssh):
 #     cd /mnt/us
-#     curl -L -o i.sh <url-to-this-file>
+#     curl -L -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh
 #     sh i.sh
 #
 # Options:
@@ -17,8 +17,10 @@
 #
 
 REPO="${REPO:-muderinkok/pw11clock}"
-REF="${REF:-claude/kindle-clock-setup-d39f1z}"
-BASEURL="${BASEURL:-https://raw.githubusercontent.com/$REPO/refs/heads/$REF}"
+### HEAD resolves to the repo's default branch, which keeps the url short
+### enough to type on a kindle. Override REF for a specific branch/tag.
+REF="${REF:-HEAD}"
+BASEURL="${BASEURL:-https://raw.githubusercontent.com/$REPO/$REF}"
 DEST="${DEST:-/mnt/us/extensions/clock}"
 FILES="kindle-clock.sh config.xml menu.json"
 
