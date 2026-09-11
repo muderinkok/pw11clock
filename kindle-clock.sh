@@ -7,6 +7,7 @@ FBINK_BIN="/mnt/us/koreader/fbink"
 FONT="regular=/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
 #FONT="regular=/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf"
 CITY="Istanbul"
+USE_NTP=1
 COND="---"
 TEMP="---"
 
@@ -62,6 +63,15 @@ update_weather() {
         TEMP=$(echo ${WEATHER##*,} | sed s/+//)
         echo "`date '+%Y-%m-%d_%H:%M:%S'`: Processed weather data. ($TEMP // $COND)" >> $LOG
     fi
+}
+
+### The screen always shows the kindle's own clock. This only nudges that
+### clock back into line when the network is there anyway; the display never
+### waits on it. Set USE_NTP=0 to leave the system clock completely alone.
+sync_time() {
+    [ "$USE_NTP" = "1" ] || return 0
+    ntpdate -s pool.ntp.org
+    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Time synced. ($?)" >> $LOG
 }
 
 clear_screen(){
@@ -121,9 +131,12 @@ fi
 echo "`date '+%Y-%m-%d_%H:%M:%S'`: ------------- Startup ------------" >> $LOG
 echo "`date '+%Y-%m-%d_%H:%M:%S'`: fbink=$FBINK_BIN battery=$BATTERY backlight=$BACKLIGHT rtc=$RTC" >> $LOG
 
-### No way of running this if wifi is down.
+### Wifi is only ever needed for the weather. The clock itself runs off
+### the kindle's own clock, so a missing network must not stop us starting.
+NOWIFI=0
 if [ `lipc-get-prop com.lab126.wifid cmState` != "CONNECTED" ]; then
-	exit 1
+    NOWIFI=1
+    echo "`date '+%Y-%m-%d_%H:%M:%S'`: No wifi at startup, carrying on." >> $LOG
 fi
 
 $FBINK -w -c -f -m -M -t $FONT,size=20 "Starting Clock..." > /dev/null 2>&1
@@ -177,9 +190,11 @@ echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 ### Disable Screensaver
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
-### set time/weather as we start up
-ntpdate -s pool.ntp.org
-update_weather
+### set time/weather as we start up, both best effort
+if [ "$NOWIFI" = "0" ]; then
+    sync_time
+    update_weather
+fi
 clear_screen
 
 while true; do
@@ -187,54 +202,18 @@ while true; do
     ### Backlight off
     echo -n 0 > $BACKLIGHT
 
-    ### Get weather data and set time via ntpdate every hour
     MINUTE=`date "+%M"`
+
+    ### Once an hour, clear out accumulated e-ink ghosting.
     if [ "$MINUTE" = "00" ]; then
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: Enabling Wifi" >> $LOG
-        ### Enable WIFI, disable wifi first in order to have a defined state
-    	lipc-set-prop com.lab126.cmd wirelessEnable 1
-        TRYCNT=0
-        NOWIFI=0
-        ### Wait for wifi to come up
-    	while wait_for_wifi; do
-            if [ ${TRYCNT} -gt 30 ]; then
-                ### waited long enough
-                echo "`date '+%Y-%m-%d_%H:%M:%S'`: No Wifi... ($TRYCNT)" >> $LOG
-                NOWIFI=1
-                break
-            fi
-            WIFISTATE=$(lipc-get-prop com.lab126.wifid cmState)
-            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Waiting for Wifi... (try $TRYCNT: $WIFISTATE)" >> $LOG
-            ### Are we stuck in READY state?
-            if [ "$WIFISTATE" = "READY" ]; then
-                ### we have to reconnect
-                echo "`date '+%Y-%m-%d_%H:%M:%S'`: Reconnecting to Wifi..." >> $LOG
-                /usr/bin/wpa_cli -i wlan0 reconnect
-
-                ### Could also be that kindle forgot the wpa ssid/psk combo
-                #if [ wpa_cli status | grep INACTIVE | wc -l ]; then...
-            fi
-    	    sleep 1
-            let TRYCNT=$TRYCNT+1
-    	done
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: wifi: `lipc-get-prop com.lab126.wifid cmState`" >> $LOG
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: wifi: `wpa_cli status`" >> $LOG
-
-        if [ `lipc-get-prop com.lab126.wifid cmState` = "CONNECTED" ]; then
-            ### Finally, set time
-            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Setting time..." >> $LOG
-            ntpdate -s pool.ntp.org
-            RC=$?
-            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Time set. ($RC)" >> $LOG
-            update_weather
-        fi
-
         clear_screen
     fi
 
-    ### Disable WIFI
-    lipc-set-prop com.lab126.cmd wirelessEnable 0
-
+    ### Draw FIRST. Nothing below this point may delay what is on screen.
+    ### Waiting for wifi used to happen up here, which meant that on an hour
+    ### where the network was down the display sat on the previous minute
+    ### for the ~40s the retry loop took, and the clock looked like it was
+    ### running late.
     #BAT=$(gasgauge-info -s)
     BAT="?"
     if [ -r "$BATTERY" ]; then
@@ -256,6 +235,43 @@ while true; do
     $FBINK -w -s
 
     echo "`date '+%Y-%m-%d_%H:%M:%S'`: Battery: $BAT" >> $LOG
+
+    ### Screen is current now, so the network can take as long as it likes.
+    ### Anything fetched here lands on the next minute's draw.
+    if [ "$MINUTE" = "00" ]; then
+        echo "`date '+%Y-%m-%d_%H:%M:%S'`: Enabling Wifi" >> $LOG
+        lipc-set-prop com.lab126.cmd wirelessEnable 1
+        TRYCNT=0
+        NOWIFI=0
+        ### Wait for wifi to come up
+        while wait_for_wifi; do
+            if [ ${TRYCNT} -gt 30 ]; then
+                ### waited long enough
+                echo "`date '+%Y-%m-%d_%H:%M:%S'`: No Wifi... ($TRYCNT)" >> $LOG
+                NOWIFI=1
+                break
+            fi
+            WIFISTATE=$(lipc-get-prop com.lab126.wifid cmState)
+            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Waiting for Wifi... (try $TRYCNT: $WIFISTATE)" >> $LOG
+            ### Are we stuck in READY state?
+            if [ "$WIFISTATE" = "READY" ]; then
+                ### we have to reconnect
+                echo "`date '+%Y-%m-%d_%H:%M:%S'`: Reconnecting to Wifi..." >> $LOG
+                /usr/bin/wpa_cli -i wlan0 reconnect
+            fi
+            sleep 1
+            let TRYCNT=$TRYCNT+1
+        done
+        echo "`date '+%Y-%m-%d_%H:%M:%S'`: wifi: `lipc-get-prop com.lab126.wifid cmState`" >> $LOG
+
+        if [ `lipc-get-prop com.lab126.wifid cmState` = "CONNECTED" ]; then
+            sync_time
+            update_weather
+        fi
+    fi
+
+    ### Disable WIFI
+    lipc-set-prop com.lab126.cmd wirelessEnable 0
 
     ### Set Wakeuptimer
 	#echo 0 > /sys/class/rtc/rtc1/wakealarm

@@ -49,6 +49,26 @@ koreader'ın `KindlePaperWhite4:init()` tanımından alındı:
 
 Diğer modellerin blokları dosyanın başında yorum satırı olarak duruyor. Ayrıca yollardan biri tutmazsa script çakılmak yerine cihazdan doğrusunu arıyor, `fbink` ve font için de alternatifler deniyor, `rtcwake` için `rtc1` yoksa `rtc0` kullanıyor.
 
+## Saat ve wifi
+
+Ekranda gösterilen saat **her zaman Kindle'ın kendi saati** (`date`). Wifi sadece hava durumu için, saat için değil.
+
+Upstream'de wifi ile saat gösterimi iki yerden birbirine bağlıydı ve wifi çekmediğinde saat geri kalıyordu:
+
+1. **Açılışta** wifi bağlı değilse script `exit 1` ile çıkıyordu — yani saat hiç başlamıyordu.
+2. **Saat başında** çizim, wifi denemesinden *sonra* yapılıyordu. Wifi yoksa yeniden deneme döngüsü ~31 saniye (+ ntpdate ve curl zaman aşımları) sürüyor, ekran o süre boyunca bir önceki dakikada takılı kalıyordu.
+
+İkisi de düzeltildi: açılışta wifi aranmıyor, ve döngüde **önce çizim yapılıp ekran tazeleniyor**, ağ işleri ondan sonra geliyor. Wifi'ın kopuk olduğu bir saat başında ölçüm:
+
+| | çizim gecikmesi |
+|---|---|
+| upstream sıralaması | 31.4 sn |
+| şimdiki sıralama | 0.1 sn |
+
+Saat başı çekilen hava durumu bir sonraki dakikanın çiziminde görünür; saat hiç beklemez.
+
+`ntpdate` hâlâ var ama artık sadece wifi zaten bağlıyken ve çizimden sonra çalışıyor — ekranı hiçbir şekilde geciktiremez. Tek işi Kindle'ın RTC'sinin zamanla kaymasını toparlamak (upstream'in notuna göre bu RTC epey kayıyor). Sistem saatine hiç dokunulmasını istemezsen `kindle-clock.sh` başındaki `USE_NTP=1` değerini `0` yap.
+
 ## Ekran yerleşimi
 
 Koordinatlar PW4 yatay tuvaline (1448x1072) göre yazıldı, ama açılışta `fbink -e` ile gerçek çözünürlük okunup ölçekleniyor — PW2'de de PW5'te de bozulmuyor.
@@ -69,6 +89,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | donanım | sabit PW2 yolları | PW4 yolları + otomatik fallback |
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
 | iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
+| wifi yoksa | açılışta çıkar, saat başı 31 sn donar | saat etkilenmez |
 
 ## Dosyalar
 
