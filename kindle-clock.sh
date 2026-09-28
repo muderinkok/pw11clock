@@ -1,6 +1,8 @@
 #!/bin/sh
 
-PWD=$(pwd)
+### Where this script lives; the weather icon font ships alongside it.
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ICON_FONT="$SCRIPT_DIR/weathericons.ttf"
 #LOG="/mnt/us/clock.log"
 LOG="/dev/null"
 FBINK_BIN="/mnt/us/koreader/fbink"
@@ -10,6 +12,10 @@ CITY="Istanbul"
 USE_NTP=1
 COND="---"
 TEMP="---"
+WX_SYM=""
+WX_AT=""
+SUNRISE=""
+SUNSET=""
 
 ### The clock runs in landscape, which is what writing to the fb rotate
 ### node achieves. 0 is confirmed to give landscape on a PW4; if some other
@@ -49,19 +55,104 @@ wait_for_wifi() {
 }
 
 
-### Updates weather info
+### Updates weather info. One request fetches everything:
+###   %x  condition as a plain ascii symbol -- language independent, picks the icon
+###   %S  sunrise, %s sunset -- to choose day or night icons
+###   %C  condition text, %t temperature
+WX_FORMAT="%x+%S+%s+%C,+%t"
 update_weather() {
-    WEATHER=$(curl -s -f -m 5 https://wttr.in/$CITY?format="%C,+%t" )
+    WEATHER=$(curl -s -f -m 5 "https://wttr.in/$CITY?format=$WX_FORMAT")
+    RC=$?
     ### old kindle CA bundles can fail TLS; plain http still works on wttr.in
     if [ -z "$WEATHER" ]; then
-        WEATHER=$(curl -s -f -m 5 http://wttr.in/$CITY?format="%C,+%t" )
+        WEATHER=$(curl -s -f -m 5 "http://wttr.in/$CITY?format=$WX_FORMAT")
+        RC=$?
     fi
-    RC=$?
     echo "`date '+%Y-%m-%d_%H:%M:%S'`: Got weather data. ($WEATHER, RC=$RC)" >> $LOG
-    if [ ! -z "$WEATHER" ]; then
-        COND=${WEATHER%,*}
-        TEMP=$(echo ${WEATHER##*,} | sed s/+//)
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: Processed weather data. ($TEMP // $COND)" >> $LOG
+
+    ### Split with parameter expansion only: %x can be "*" or "**", which an
+    ### unquoted word split would glob against the current directory.
+    W_REST="$WEATHER"
+    W_SYM="${W_REST%% *}";  W_REST="${W_REST#* }"
+    W_RISE="${W_REST%% *}"; W_REST="${W_REST#* }"
+    W_SET="${W_REST%% *}";  W_REST="${W_REST#* }"
+
+    ### wttr.in answers some failures with a 200 and a sentence of text.
+    ### Only take the data if the sunrise field looks like a time.
+    case "$W_RISE" in
+        [0-9?][0-9?]:[0-9?][0-9?]*) ;;
+        *)
+            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Ignoring weather response." >> $LOG
+            return 1
+            ;;
+    esac
+
+    WX_SYM="$W_SYM"
+    SUNRISE="$W_RISE"
+    SUNSET="$W_SET"
+    COND="${W_REST%,*}"
+    TEMP=$(echo "${W_REST##*,}" | sed 's/^ *//; s/+//')
+    WX_AT=$(date +%s)
+    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Processed weather data. ($WX_SYM // $TEMP // $COND // $SUNRISE-$SUNSET)" >> $LOG
+}
+
+### Minutes since midnight for an HH:MM[:SS] string; fails if it isn't one.
+to_minutes() {
+    case "$1" in
+        [0-2][0-9]:[0-5][0-9]*) ;;
+        *) return 1 ;;
+    esac
+    TM_H=${1%%:*}; TM_M=${1#*:}; TM_M=${TM_M%%:*}
+    ### strip one leading zero so $(( )) does not read "08" as octal
+    TM_H=${TM_H#0}; TM_M=${TM_M#0}
+    echo $(( ${TM_H:-0} * 60 + ${TM_M:-0} ))
+}
+
+### True between sunset and sunrise, using wttr.in's times for the city and
+### 07:00 / 19:00 if it did not give any.
+is_night() {
+    NOW_M=$(to_minutes "$(date '+%H:%M')") || return 1
+    RISE_M=$(to_minutes "$SUNRISE") || RISE_M=420
+    SET_M=$(to_minutes "$SUNSET") || SET_M=1140
+    [ "$NOW_M" -lt "$RISE_M" ] || [ "$NOW_M" -ge "$SET_M" ]
+}
+
+### Prints the Weather Icons glyph for the current %x symbol. Codepoints are
+### from erikflowers/weather-icons (values/weathericons.xml), written as the
+### utf-8 octal bytes printf understands.
+weather_icon() {
+    if is_night; then N=1; else N=0; fi
+    case "$WX_SYM" in
+        o)        [ $N = 1 ] && G='\357\200\256' || G='\357\200\215' ;; # night-clear / day-sunny
+        m)        [ $N = 1 ] && G='\357\202\206' || G='\357\200\202' ;; # night-alt-cloudy / day-cloudy
+        mm|mmm)   G='\357\200\223' ;;                                   # cloudy
+        =)        G='\357\200\224' ;;                                   # fog
+        .)        [ $N = 1 ] && G='\357\200\251' || G='\357\200\211' ;; # night-alt-showers / day-showers
+        /)        G='\357\200\234' ;;                                   # sprinkle
+        //)       G='\357\200\232' ;;                                   # showers
+        ///)      G='\357\200\231' ;;                                   # rain
+        x|x/)     G='\357\202\265' ;;                                   # sleet
+        \*|\*\*)  G='\357\200\233' ;;                                   # snow
+        \*/|\*/\*) [ $N = 1 ] && G='\357\200\252' || G='\357\200\212' ;; # night-alt-snow / day-snow
+        !/)       [ $N = 1 ] && G='\357\200\254' || G='\357\200\216' ;; # night-alt-storm-showers / day-storm-showers
+        /!/)      G='\357\200\236' ;;                                   # thunderstorm
+        \*!\*)    [ $N = 1 ] && G='\357\201\255' || G='\357\201\253' ;; # night-alt-/day-snow-thunderstorm
+        *)        return 1 ;;
+    esac
+    printf "$G"
+}
+
+### "Updated 12 min ago", so a stale forecast is obvious at a glance.
+weather_age() {
+    [ -n "$WX_AT" ] || return 1
+    AGE=$(( ($(date +%s) - WX_AT) / 60 ))
+    [ "$AGE" -ge 0 ] || AGE=0
+    if [ "$AGE" -lt 1 ]; then
+        echo "Updated just now"
+    elif [ "$AGE" -lt 60 ]; then
+        echo "Updated $AGE min ago"
+    else
+        echo "Updated $((AGE / 60)) h ago"
     fi
 }
 
@@ -182,6 +273,7 @@ TIME_TOP=$((14 * SCREEN_H / REF_H))
 DATE_TOP=$((580 * SCREEN_H / REF_H))
 COND_TOP=$((721 * SCREEN_H / REF_H))
 TEMP_TOP=$((849 * SCREEN_H / REF_H))
+AGE_TOP=$((1000 * SCREEN_H / REF_H))
 BAT_LEFT=$((1248 * SCREEN_W / REF_W))
 WARN_LEFT=$((70 * SCREEN_W / REF_W))
 
@@ -227,7 +319,20 @@ while true; do
     $FBINK -b -m -t $FONT,size=20,top=$DATE_TOP,bottom=0,left=0,right=0 "$DATE"
     $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=$BAT_LEFT,right=0 "Bat: $BAT"
     $FBINK -b -m -t $FONT,size=20,top=$COND_TOP,bottom=0,left=0,right=0 "$COND"
-    $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
+    ICON=""
+    if [ -r "$ICON_FONT" ]; then
+        ICON=$(weather_icon)
+    fi
+    if [ -n "$ICON" ]; then
+        ### The icon font goes in as the "bold" face, so **...** switches to it
+        ### mid-line and fbink still centres icon + temperature as one line.
+        $FBINK -b -m -t $FONT,bold=$ICON_FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0,format "**$ICON**  $TEMP"
+    else
+        $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
+    fi
+    if AGE_TEXT=$(weather_age); then
+        $FBINK -b -m -t $FONT,size=10,top=$AGE_TOP,bottom=0,left=0,right=0 "$AGE_TEXT"
+    fi
     if [ "$NOWIFI" = "1" ]; then
         $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=$WARN_LEFT,right=0 "No Wifi!"
     fi

@@ -22,7 +22,7 @@ REPO="${REPO:-muderinkok/pw11clock}"
 REF="${REF:-HEAD}"
 BASEURL="${BASEURL:-https://raw.githubusercontent.com/$REPO/$REF}"
 DEST="${DEST:-/mnt/us/extensions/clock}"
-FILES="kindle-clock.sh config.xml menu.json"
+FILES="kindle-clock.sh config.xml menu.json weathericons.ttf LICENSE-weathericons.txt"
 
 AUTORUN="ask"
 

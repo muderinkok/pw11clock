@@ -69,6 +69,17 @@ Saat başı çekilen hava durumu bir sonraki dakikanın çiziminde görünür; s
 
 `ntpdate` hâlâ var ama artık sadece wifi zaten bağlıyken ve çizimden sonra çalışıyor — ekranı hiçbir şekilde geciktiremez. Tek işi Kindle'ın RTC'sinin zamanla kaymasını toparlamak (upstream'in notuna göre bu RTC epey kayıyor). Sistem saatine hiç dokunulmasını istemezsen `kindle-clock.sh` başındaki `USE_NTP=1` değerini `0` yap.
 
+## Hava durumu ikonu ve "Updated" satırı
+
+Sıcaklığın solunda hava durumuna göre bir ikon, altında küçük bir `Updated 12 min ago` satırı var.
+
+- **İkon:** Kindle fontları emoji basamıyor, o yüzden [Weather Icons](https://github.com/erikflowers/weather-icons) fontu (`weathericons.ttf`, SIL OFL 1.1) script'in yanında geliyor. Hava tipi wttr.in'in dil bağımsız `%x` kodundan okunuyor (`o` güneşli, `m` parçalı bulutlu, `///` yoğun yağmur, `*` kar...), metinden değil. Font yoksa ya da kod tanınmazsa sadece sıcaklık yazılır.
+- **Gece/gündüz:** wttr.in'den şehrin gün doğumu/batımı da çekiliyor (`%S`, `%s`). Gece güneş yerine ay, bulut yerine gece bulutu gösteriliyor. Bu saatler gelmezse 07:00–19:00 varsayılıyor.
+- **Updated:** son başarılı hava durumu çekiminden beri geçen süre; bir saatin altında dakika, üstünde saat. Wifi çekmediğinde saat başları atlanır ve bu sayı büyür — gösterilen havanın ne kadar eski olduğunu buradan anlarsın.
+- wttr.in bazen hata durumunda düz bir cümleyle cevap veriyor; yanıt beklenen biçimde değilse yok sayılıp eski veri korunuyor.
+
+İkon, fbink'in `format` modunda "bold" font olarak veriliyor: `**<ikon>**  21°C`. Böylece ikon ve sıcaklık tek satır olarak ortalanıyor.
+
 ## Ekran yerleşimi
 
 Koordinatlar PW4 yatay tuvaline (1448x1072) göre yazıldı, ama açılışta `fbink -e` ile gerçek çözünürlük okunup ölçekleniyor — PW2'de de PW5'te de bozulmuyor.
@@ -90,12 +101,15 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
 | iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
 | wifi yoksa | açılışta çıkar, saat başı 31 sn donar | saat etkilenmez |
+| hava ikonu | yok | Weather Icons, gece/gündüz |
+| veri yaşı | gösterilmez | `Updated N min/h ago` |
 
 ## Dosyalar
 
 * `kindle-clock.sh` — ana döngü: saati basar, RAM'e suspend eder, uyanır
 * `install.sh` — Kindle'da tek satırlık kurulum + donanım probe
 * `config.xml`, `menu.json` — KUAL menü tanımı
+* `weathericons.ttf`, `LICENSE-weathericons.txt` — hava durumu ikon fontu ve lisansı
 
 ## Gereksinimler
 
