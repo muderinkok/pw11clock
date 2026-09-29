@@ -4,7 +4,7 @@
 #
 # On the kindle (kTerm / ssh):
 #     cd /mnt/us
-#     curl -L -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh
+#     curl -fL -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh
 #     sh i.sh
 #
 # Options:

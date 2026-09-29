@@ -11,7 +11,7 @@ Ekran **yatay** kullanılıyor (upstream'deki gibi) — tuval PW4'te 1448x1072.
 kTerm açıkken tek satır:
 
 ```sh
-cd /mnt/us && curl -L -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh && sh i.sh
+cd /mnt/us && curl -fL -o i.sh https://github.com/muderinkok/pw11clock/raw/HEAD/install.sh && sh i.sh
 ```
 
 `HEAD` repo'nun default branch'ine çözülüyor, o yüzden link kısa ve branch adı değişse bile ölmüyor.
