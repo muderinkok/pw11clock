@@ -80,7 +80,7 @@ wifi_connected() {
 ###   %S  sunrise, %s sunset -- to choose day or night icons
 ###   %C  condition text, %t temperature
 WX_FORMAT="%x+%S+%s+%C,+%t"
-update_weather() {
+fetch_weather() {
     WEATHER=$(curl -s -f -m 5 "https://wttr.in/$CITY?format=$WX_FORMAT")
     RC=$?
     ### old kindle CA bundles can fail TLS; plain http still works on wttr.in
@@ -89,6 +89,12 @@ update_weather() {
         RC=$?
     fi
     log "Got weather data. ($WEATHER, RC=$RC)"
+    printf '%s' "$WEATHER"
+}
+
+### Parses a wttr.in line (as fetched above) into the display variables.
+parse_weather() {
+    WEATHER="$1"
 
     ### Split with parameter expansion only: %x can be "*" or "**", which an
     ### unquoted word split would glob against the current directory.
@@ -291,50 +297,60 @@ lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
 clear_screen
 
-### Brings wifi up and, once connected, syncs time and weather. Never waits
-### past second 50 of the current minute, so the next minute is always drawn
-### on time: if wifi is not there yet it is left enabled and tried again the
-### next minute, up to NET_MAX_TRIES times, before giving up until the hour.
-NET_MAX_TRIES=5
-network_step() {
-    ### only when off: re-sending it could restart a connection in progress
-    if [ "$(lipc-get-prop com.lab126.cmd wirelessEnable 2>/dev/null)" != "1" ]; then
-        lipc-set-prop com.lab126.cmd wirelessEnable 1
-    fi
-    while ! wifi_connected; do
-        SEC=$(date +%S); SEC=${SEC#0}
-        [ "${SEC:-0}" -lt 50 ] || break
-        WIFISTATE=$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)
-        log "Waiting for wifi ($WIFISTATE)"
-        ### stuck in READY means we have to reconnect ourselves
-        if [ "$WIFISTATE" = "READY" ]; then
-            /usr/bin/wpa_cli -i wlan0 reconnect > /dev/null 2>&1
-        fi
-        sleep 1
-    done
+### The network runs in the background and never touches wifi: no airplane
+### mode, no reconnects. Whatever state the kindle's wifi is in, we use it
+### if it is connected and otherwise try again next minute. The drawing loop
+### only ever reads a file this leaves behind, so a hung DNS lookup, a slow
+### ntpdate or a dead network cannot delay the time on screen.
+STATE_DIR="/tmp/pw11clock"
+FETCH_PID=""
+FETCH_STARTED=0
 
-    SEC=$(date +%S); SEC=${SEC#0}
-    if wifi_connected && [ "${SEC:-0}" -ge 30 ]; then
-        ### ntpdate and curl can take a while; starting them this late would
-        ### run into the next minute. Stay connected and do it then instead.
-        log "Wifi up late in the minute, fetching next minute."
-    elif wifi_connected; then
-        NOWIFI=0
-        NET_DUE=0
+fetch_running() {
+    [ -n "$FETCH_PID" ] && kill -0 "$FETCH_PID" 2>/dev/null
+}
+
+start_fetch() {
+    FETCH_STARTED=$(date +%s)
+    (
         sync_time
-        update_weather
-    else
-        NET_TRIES=$((NET_TRIES + 1))
-        log "No wifi yet (attempt $NET_TRIES of $NET_MAX_TRIES)"
-        if [ "$NET_TRIES" -ge "$NET_MAX_TRIES" ]; then
-            NOWIFI=1
+        W=$(fetch_weather)
+        if [ -n "$W" ]; then
+            printf '%s' "$W" > "$STATE_DIR/weather.tmp" && mv "$STATE_DIR/weather.tmp" "$STATE_DIR/weather"
+        fi
+    ) > /dev/null 2>&1 &
+    FETCH_PID=$!
+}
+
+### Called after every draw. Cheap: one lipc query at most.
+network_tick() {
+    ### Pick up anything a finished fetch left behind.
+    if [ -f "$STATE_DIR/weather" ]; then
+        if parse_weather "$(cat "$STATE_DIR/weather")"; then
             NET_DUE=0
         fi
+        rm -f "$STATE_DIR/weather"
     fi
 
-    ### wifi off again once we are done with it for this hour
-    if [ "$NET_DUE" = "0" ]; then
-        lipc-set-prop com.lab126.cmd wirelessEnable 0
+    if fetch_running; then
+        ### A fetch that has been going for 5 minutes is not coming back.
+        if [ $(( $(date +%s) - FETCH_STARTED )) -gt 300 ]; then
+            log "Fetch hung, killing it."
+            kill "$FETCH_PID" 2>/dev/null
+        fi
+        return 0
+    fi
+
+    [ "$NET_DUE" = "1" ] || return 0
+    if wifi_connected; then
+        NOWIFI=0
+        ### one attempt every 5 minutes while the data is still due
+        if [ $(( $(date +%s) - FETCH_STARTED )) -ge 300 ]; then
+            log "Fetching weather in the background."
+            start_fetch
+        fi
+    else
+        NOWIFI=1
     fi
 }
 
@@ -370,18 +386,14 @@ sleep_until() {
     fi
 }
 
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/weather" "$STATE_DIR/weather.tmp"
 NOWIFI=0
 NET_DUE=1
-NET_TRIES=0
 NET_HOUR=""
 
 while true; do
-    rotate_log
-    ### powerd can drop this across wifi and power state changes; keep it set
-    lipc-set-prop com.lab126.powerd preventScreenSaver 1
-    ### Backlight off
-    echo -n 0 > $BACKLIGHT
-
+    ### Draw FIRST, straight after waking. Nothing may run before this.
     ### One date call, so the time drawn and the time we plan from agree.
     NOWSTR=$(date '+%s|%M|%Y%m%d%H|%H:%M|%A, %-d. %B %Y')
     DRAWN_AT=${NOWSTR%%|*};  NOWSTR=${NOWSTR#*|}
@@ -390,15 +402,15 @@ while true; do
     TIME=${NOWSTR%%|*}
     DATE=${NOWSTR#*|}
 
-    ### Once an hour: clear out e-ink ghosting and schedule a network update.
+    ### Once an hour: flash the refresh to clear e-ink ghosting, and make a
+    ### weather update due.
+    FLASH=""
     if [ "$MINUTE" = "00" ] && [ "$HOUR_KEY" != "$NET_HOUR" ]; then
         NET_HOUR=$HOUR_KEY
         NET_DUE=1
-        NET_TRIES=0
-        clear_screen
+        FLASH="-f"
     fi
 
-    ### Draw FIRST. Nothing below this point may delay what is on screen.
     #BAT=$(gasgauge-info -s)
     BAT="?"
     if [ -r "$BATTERY" ]; then
@@ -428,16 +440,17 @@ while true; do
         $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=$WARN_LEFT,right=0 "No Wifi!"
     fi
     ### update framebuffer
-    $FBINK -w -s
+    $FBINK -w -s $FLASH
 
+    ### Everything below happens with the right time already on screen.
+    echo -n 0 > $BACKLIGHT
+    ### powerd can drop this across power state changes; keep it set
+    lipc-set-prop com.lab126.powerd preventScreenSaver 1
     log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+    rotate_log
+    network_tick
 
-    ### Screen is current now, so the network can take its time.
-    if [ "$NET_DUE" = "1" ]; then
-        network_step
-    fi
-
-    ### If the work above ran into the next minute, draw that minute now
+    ### If any of that ran into the next minute, draw that minute now
     ### rather than sleeping through it.
     NOW=$(date +%s)
     if [ $((NOW / 60)) -ne $((DRAWN_AT / 60)) ]; then

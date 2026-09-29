@@ -31,7 +31,7 @@ Kurulumdan sonra saat KUAL'de **Clock** olarak da görünür.
 
 Saat çalışırken Kindle arayüzü kapalıdır (`stop lab126_gui`). Çıkmanın tek yolu güç düğmesini ~10 saniye basılı tutup yeniden başlatmak.
 
-**Yeniden başlattıktan sonra wifi kapalı gelir.** Saat, wifi'ı Kindle'ın uçak modu ayarıyla (`com.lab126.cmd wirelessEnable`) kapatıyor ve bu ayar yeniden başlatmada korunuyor. `install.sh` wifi'ı kendisi açıp bağlanmasını bekliyor. Başka bir iş için wifi lazımsa Kindle ayarlarından uçak modunu kapat.
+Saat wifi'a ve uçak moduna **hiç dokunmuyor**; Kindle'ı yeniden başlattığında wifi, saati başlattığında nasılsa öyle. (Eski sürümler wifi'ı uçak moduyla kapatıyordu ve zorla yeniden başlatma script'e onu geri açma fırsatı vermediği için Kindle uçak modunda kalıyordu. `install.sh` bu durumu hâlâ düzeltiyor: bağlı değilse wifi'ı açıp bağlanmayı bekliyor.)
 
 ## Günlük (log)
 
@@ -57,25 +57,16 @@ Diğer modellerin blokları dosyanın başında yorum satırı olarak duruyor. A
 
 ## Saat ve wifi
 
-Ekranda gösterilen saat **her zaman Kindle'ın kendi saati** (`date`). Wifi sadece hava durumu için, saat için değil.
+**Ekrandaki saat her zaman Kindle'ın sistem saati** (`date`), ve bunun wifi ile hiçbir bağı yok:
 
-Upstream'de wifi ile saat gösterimi iki yerden birbirine bağlıydı ve wifi çekmediğinde saat geri kalıyordu:
+- **Script wifi'a dokunmuyor.** Uçak modu, yeniden bağlanma, `wpa_cli` yok. Wifi Kindle'ın kendi işi; bağlıysa kullanılıyor, değilse bir sonraki dakika tekrar bakılıyor.
+- **İnternet işleri arka planda.** `ntpdate` ve hava durumu ayrı bir süreçte çalışıyor ve sonucu bir dosyaya bırakıyor; çizim döngüsü sadece o dosyayı okuyor. DNS asılı kalsa, ağ ölü olsa, istek dakikalarca sürse de ekran bir saniye bile beklemiyor. 5 dakikadan uzun süren bir istek öldürülüyor.
+- **Uyanınca ilk iş çizim.** Pil okuma dışında hiçbir şey çizimden önce çalışmıyor.
+- Hava durumu saat başı ve açılışta "vadesi gelmiş" sayılıyor; wifi bağlıysa en fazla 5 dakikada bir deneniyor, alınana kadar. Wifi yoksa köşede `No Wifi!` çıkıyor ve `Updated N h ago` büyüyor — ama saat hiç etkilenmiyor.
 
-1. **Açılışta** wifi bağlı değilse script `exit 1` ile çıkıyordu — yani saat hiç başlamıyordu.
-2. **Saat başında** çizim, wifi denemesinden *sonra* yapılıyordu. Wifi yoksa yeniden deneme döngüsü ~31 saniye (+ ntpdate ve curl zaman aşımları) sürüyor, ekran o süre boyunca bir önceki dakikada takılı kalıyordu.
+Upstream'de wifi ile saat iki yerden bağlıydı: açılışta wifi yoksa script çıkıyordu, saat başında da çizim wifi beklemesinden sonra yapılıyordu (wifi yoksa ~31 sn donuyordu). İkisi de gitti.
 
-İkisi de düzeltildi: açılışta wifi aranmıyor, ve döngüde **önce çizim yapılıp ekran tazeleniyor**, ağ işleri ondan sonra geliyor. Wifi'ın kopuk olduğu bir saat başında ölçüm:
-
-| | çizim gecikmesi |
-|---|---|
-| upstream sıralaması | 31.4 sn |
-| şimdiki sıralama | 0.1 sn |
-
-Saat başı çekilen hava durumu bir sonraki dakikanın çiziminde görünür; saat hiç beklemez.
-
-Wifi adımı da artık dakikayı hiç taşırmıyor: saniye 50'ye kadar bağlantı bekliyor, gelmezse wifi açık bırakılıp bir sonraki dakika tekrar deneniyor (en fazla 5 dakika). Bağlantı dakikanın 30. saniyesinden sonra gelirse `ntpdate` ve hava durumu bir sonraki dakikanın başına erteleniyor. Açılışta da bu adım bir kez çalışıyor, yani saat başlar başlamaz hava durumu geliyor.
-
-`ntpdate` hâlâ var ama artık sadece wifi zaten bağlıyken ve çizimden sonra çalışıyor — ekranı hiçbir şekilde geciktiremez. Tek işi Kindle'ın RTC'sinin zamanla kaymasını toparlamak (upstream'in notuna göre bu RTC epey kayıyor). Sistem saatine hiç dokunulmasını istemezsen `kindle-clock.sh` başındaki `USE_NTP=1` değerini `0` yap.
+`ntpdate` duruyor (`USE_NTP=1`): sistem saatini düzeltir, ekran da her zaman sistem saatini gösterir. Sistem saatine hiç dokunulmasın istersen `USE_NTP=0`.
 
 ## Uyku modu: neden artık suspend yok
 
@@ -89,7 +80,7 @@ Artık `kindle-clock.sh` başında bir ayar var:
 SLEEP_MODE="awake"
 ```
 
-- **`awake`** (varsayılan): cihaz uyanık kalıyor, dakikalar arası düz `sleep`. Saat hiç şaşmıyor. Karşılığı pil: şarja takılıyken önemi yok, pille çalışırken suspend moduna göre çok daha hızlı biter.
+- **`awake`** (varsayılan): cihaz uyanık kalıyor, dakikalar arası düz `sleep`. Saat hiç şaşmıyor. Karşılığı pil: şarja takılıyken önemi yok, pille çalışırken suspend moduna göre çok daha hızlı biter. Log'da her dakika pil yüzdesi var; tüketimi görmek için: `grep Drew /mnt/us/clock.log | sed -n '1p;$p'`
 - **`suspend`**: eski pil dostu davranış, deneysel. Güvenlik önlemleri eklendi: alarm her saat çipine kuruluyor ve kurulduğu doğrulanmadan ya da 10 saniyeden az süre kaldıysa suspend edilmiyor (geçmişte kalan bir alarm hiç çalmaz). Erken uyanma ya da başarısız suspend düz `sleep` ile tamamlanıyor. Ama `powerd` çakışması hâlâ olabilir.
 
 Ayrıca her iki modda:
@@ -130,6 +121,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
 | iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
 | wifi yoksa | açılışta çıkar, saat başı 31 sn donar | saat etkilenmez |
+| wifi yönetimi | her saat uçak modunu açıp kapatır | hiç dokunmaz, ağ işleri arka planda |
 | dakikalar arası | `rtcwake` + suspend, PW4'te donuyor | `SLEEP_MODE=awake`, suspend opsiyonel |
 | log | `/dev/null` | `/mnt/us/clock.log`, boyutu sınırlı |
 | hava ikonu | yok | Weather Icons, gece/gündüz |
