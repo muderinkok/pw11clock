@@ -127,6 +127,10 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | hava ikonu | yok | Weather Icons, gece/gündüz |
 | veri yaşı | gösterilmez | `Updated N min/h ago` |
 
+## Yapılacaklar
+
+- [ ] **Hava durumu güncelleme sıklığını düşür.** Şu an saatte bir (her `xx:00`) çekiliyor; başarısız olursa alınana kadar 5 dakikada bir yeniden deneniyor. Daha seyrek yapmak için `kindle-clock.sh` döngüsündeki `if [ "$MINUTE" = "00" ] ...` koşulu (orada `NET_DUE=1` yapılıyor) ve `network_tick` içindeki 300 saniyelik yeniden deneme aralığı değiştirilecek. `Updated N h ago` satırı zaten saat cinsinden yaş gösterdiği için ekran tarafında değişiklik gerekmiyor.
+
 ## Dosyalar
 
 * `kindle-clock.sh` — ana döngü: saati basar, RAM'e suspend eder, uyanır
