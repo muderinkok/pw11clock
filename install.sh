@@ -60,16 +60,47 @@ if [ "$AUTORUN" = "probe" ]; then
     exit 0
 fi
 
+### The clock turns wifi off with the kindle's airplane-mode switch, and that
+### survives a reboot. Turn it back on and wait for a connection first.
+ensure_wifi() {
+    command -v lipc-get-prop >/dev/null 2>&1 || return 0
+    [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" = "CONNECTED" ] && return 0
+    echo "  wifi is off, turning it on..."
+    lipc-set-prop com.lab126.cmd wirelessEnable 1
+    WAITED=0
+    while [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" != "CONNECTED" ]; do
+        if [ "$WAITED" -ge 60 ]; then
+            echo "  wifi did not connect within 60s."
+            echo "  Check that the kindle knows your network (Settings > Wi-Fi)."
+            return 1
+        fi
+        sleep 2
+        WAITED=$((WAITED + 2))
+    done
+    echo "  wifi connected."
+    ### DNS can lag the connection by a moment
+    sleep 3
+}
+
 ### Download one file, trying the tools this kindle might have.
 fetch() {
     URL="$1"
     OUT="$2"
     if command -v curl >/dev/null 2>&1; then
         curl -L -s -f -o "$OUT" "$URL" && return 0
-        ### Kindle firmware ships a stale CA bundle; retry without verification
-        ### rather than failing the install outright.
-        echo "  warning: TLS verification failed, retrying without it"
-        curl -L -s -f -k -o "$OUT" "$URL" && return 0
+        RC=$?
+        case "$RC" in
+            6|7|28)
+                echo "  no network (curl error $RC: cannot reach the server)"
+                return 1
+                ;;
+            35|51|58|60|77)
+                ### Kindle firmware ships a stale CA bundle; retry without
+                ### verification rather than failing the install outright.
+                echo "  warning: TLS verification failed, retrying without it"
+                curl -L -s -f -k -o "$OUT" "$URL" && return 0
+                ;;
+        esac
     fi
     if command -v wget >/dev/null 2>&1; then
         wget -q -O "$OUT" "$URL" && return 0
@@ -82,12 +113,14 @@ echo "pw11clock installer"
 echo "  source: $BASEURL"
 echo "  target: $DEST"
 
+ensure_wifi || exit 1
+
 mkdir -p "$DEST" || { echo "cannot create $DEST"; exit 1; }
 
 for FILE in $FILES; do
     echo "  fetching $FILE"
     if ! fetch "$BASEURL/$FILE" "$DEST/$FILE.new"; then
-        echo "  FAILED to download $FILE - is wifi on?"
+        echo "  FAILED to download $FILE"
         rm -f "$DEST/$FILE.new"
         exit 1
     fi

@@ -3,13 +3,23 @@
 ### Where this script lives; the weather icon font ships alongside it.
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ICON_FONT="$SCRIPT_DIR/weathericons.ttf"
-#LOG="/mnt/us/clock.log"
-LOG="/dev/null"
+### Log to a file so that when something goes wrong on the device there is a
+### record of it. It grows ~85 KB a day and is trimmed to the last ~2000
+### lines (a day or so) once it passes 256 KB. Set to /dev/null to disable.
+LOG="/mnt/us/clock.log"
 FBINK_BIN="/mnt/us/koreader/fbink"
 FONT="regular=/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
 #FONT="regular=/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf"
 CITY="Istanbul"
 USE_NTP=1
+
+### How to wait between minutes.
+###   awake    stay awake and sleep. Keeps exact time; costs battery, which
+###            does not matter while the kindle is on its charger.
+###   suspend  suspend to RAM with an rtc alarm. Battery friendly, but on a
+###            kindle the rtc alarm belongs to the system's powerd, and on a
+###            PW4 the clock has been seen to stop waking up. Experimental.
+SLEEP_MODE="awake"
 COND="---"
 TEMP="---"
 WX_SYM=""
@@ -50,8 +60,18 @@ BATTERY="/sys/class/power_supply/bd71827_bat/capacity"
 REF_W=1448
 REF_H=1072
 
-wait_for_wifi() {
-  return `lipc-get-prop com.lab126.wifid cmState | grep -e "CONNECTED" | wc -l`
+log() {
+    echo "$(date '+%Y-%m-%d_%H:%M:%S'): $*" >> $LOG
+}
+
+rotate_log() {
+    [ -f "$LOG" ] || return 0
+    [ "$(wc -c < "$LOG")" -gt 262144 ] || return 0
+    tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+}
+
+wifi_connected() {
+    [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" = "CONNECTED" ]
 }
 
 
@@ -68,7 +88,7 @@ update_weather() {
         WEATHER=$(curl -s -f -m 5 "http://wttr.in/$CITY?format=$WX_FORMAT")
         RC=$?
     fi
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Got weather data. ($WEATHER, RC=$RC)" >> $LOG
+    log "Got weather data. ($WEATHER, RC=$RC)"
 
     ### Split with parameter expansion only: %x can be "*" or "**", which an
     ### unquoted word split would glob against the current directory.
@@ -82,7 +102,7 @@ update_weather() {
     case "$W_RISE" in
         [0-9?][0-9?]:[0-9?][0-9?]*) ;;
         *)
-            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Ignoring weather response." >> $LOG
+            log "Ignoring weather response."
             return 1
             ;;
     esac
@@ -93,7 +113,7 @@ update_weather() {
     COND="${W_REST%,*}"
     TEMP=$(echo "${W_REST##*,}" | sed 's/^ *//; s/+//')
     WX_AT=$(date +%s)
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Processed weather data. ($WX_SYM // $TEMP // $COND // $SUNRISE-$SUNSET)" >> $LOG
+    log "Processed weather data. ($WX_SYM // $TEMP // $COND // $SUNRISE-$SUNSET)"
 }
 
 ### Minutes since midnight for an HH:MM[:SS] string; fails if it isn't one.
@@ -162,7 +182,7 @@ weather_age() {
 sync_time() {
     [ "$USE_NTP" = "1" ] || return 0
     ntpdate -s pool.ntp.org
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Time synced. ($?)" >> $LOG
+    log "Time synced. ($?)"
 }
 
 clear_screen(){
@@ -213,22 +233,9 @@ if [ ! -r "${FONT#regular=}" ]; then
     done
 fi
 
-RTC="/dev/rtc1"
-if [ ! -e "$RTC" ]; then
-    RTC="/dev/rtc0"
-fi
-
 ### Prep Kindle...
-echo "`date '+%Y-%m-%d_%H:%M:%S'`: ------------- Startup ------------" >> $LOG
-echo "`date '+%Y-%m-%d_%H:%M:%S'`: fbink=$FBINK_BIN battery=$BATTERY backlight=$BACKLIGHT rtc=$RTC" >> $LOG
-
-### Wifi is only ever needed for the weather. The clock itself runs off
-### the kindle's own clock, so a missing network must not stop us starting.
-NOWIFI=0
-if [ `lipc-get-prop com.lab126.wifid cmState` != "CONNECTED" ]; then
-    NOWIFI=1
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: No wifi at startup, carrying on." >> $LOG
-fi
+log "------------- Startup ------------"
+log "fbink=$FBINK_BIN battery=$BATTERY backlight=$BACKLIGHT sleep=$SLEEP_MODE"
 
 $FBINK -w -c -f -m -M -t $FONT,size=20 "Starting Clock..." > /dev/null 2>&1
 
@@ -265,7 +272,7 @@ SCREEN_W=$(echo "$FBSTATE" | sed -n 's/.*viewWidth=\([0-9][0-9]*\).*/\1/p')
 SCREEN_H=$(echo "$FBSTATE" | sed -n 's/.*viewHeight=\([0-9][0-9]*\).*/\1/p')
 [ -n "$SCREEN_W" ] || SCREEN_W=$REF_W
 [ -n "$SCREEN_H" ] || SCREEN_H=$REF_H
-echo "`date '+%Y-%m-%d_%H:%M:%S'`: screen ${SCREEN_W}x${SCREEN_H} ($FBSTATE)" >> $LOG
+log "screen ${SCREEN_W}x${SCREEN_H} ($FBSTATE)"
 
 ### Font sizes stay in points: fbink scales pt by the panel's dpi, so they
 ### already track the device. Only the pixel margins need scaling.
@@ -282,37 +289,121 @@ echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 ### Disable Screensaver
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
-### set time/weather as we start up, both best effort
-if [ "$NOWIFI" = "0" ]; then
-    sync_time
-    update_weather
-fi
 clear_screen
 
+### Brings wifi up and, once connected, syncs time and weather. Never waits
+### past second 50 of the current minute, so the next minute is always drawn
+### on time: if wifi is not there yet it is left enabled and tried again the
+### next minute, up to NET_MAX_TRIES times, before giving up until the hour.
+NET_MAX_TRIES=5
+network_step() {
+    ### only when off: re-sending it could restart a connection in progress
+    if [ "$(lipc-get-prop com.lab126.cmd wirelessEnable 2>/dev/null)" != "1" ]; then
+        lipc-set-prop com.lab126.cmd wirelessEnable 1
+    fi
+    while ! wifi_connected; do
+        SEC=$(date +%S); SEC=${SEC#0}
+        [ "${SEC:-0}" -lt 50 ] || break
+        WIFISTATE=$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)
+        log "Waiting for wifi ($WIFISTATE)"
+        ### stuck in READY means we have to reconnect ourselves
+        if [ "$WIFISTATE" = "READY" ]; then
+            /usr/bin/wpa_cli -i wlan0 reconnect > /dev/null 2>&1
+        fi
+        sleep 1
+    done
+
+    SEC=$(date +%S); SEC=${SEC#0}
+    if wifi_connected && [ "${SEC:-0}" -ge 30 ]; then
+        ### ntpdate and curl can take a while; starting them this late would
+        ### run into the next minute. Stay connected and do it then instead.
+        log "Wifi up late in the minute, fetching next minute."
+    elif wifi_connected; then
+        NOWIFI=0
+        NET_DUE=0
+        sync_time
+        update_weather
+    else
+        NET_TRIES=$((NET_TRIES + 1))
+        log "No wifi yet (attempt $NET_TRIES of $NET_MAX_TRIES)"
+        if [ "$NET_TRIES" -ge "$NET_MAX_TRIES" ]; then
+            NOWIFI=1
+            NET_DUE=0
+        fi
+    fi
+
+    ### wifi off again once we are done with it for this hour
+    if [ "$NET_DUE" = "0" ]; then
+        lipc-set-prop com.lab126.cmd wirelessEnable 0
+    fi
+}
+
+### Arms a wake alarm $1 seconds out on every rtc that takes one. Fails if
+### none could be armed, in which case we must not suspend at all.
+arm_wakeup() {
+    ARMED=1
+    for W in /sys/class/rtc/rtc*/wakealarm; do
+        [ -w "$W" ] || continue
+        WAKE_ENABLE="${W%/wakealarm}/device/power/wakeup"
+        [ -w "$WAKE_ENABLE" ] && echo enabled > "$WAKE_ENABLE" 2>/dev/null
+        echo 0 > "$W" 2>/dev/null
+        echo "+$1" > "$W" 2>/dev/null || continue
+        [ -n "$(cat "$W" 2>/dev/null)" ] && ARMED=0
+    done
+    return $ARMED
+}
+
+### Waits until epoch $1.
+sleep_until() {
+    LEFT=$(($1 - $(date +%s)))
+    ### Suspend only with a confirmed alarm and enough time for it: an alarm
+    ### that is already in the past by the time we are asleep never fires.
+    if [ "$SLEEP_MODE" = "suspend" ] && [ "$LEFT" -ge 10 ] && arm_wakeup "$LEFT"; then
+        log "Suspending for ${LEFT}s"
+        echo mem > /sys/power/state
+    fi
+    ### Whatever happened above -- awake mode, a suspend that failed straight
+    ### away, or an early wake -- make up the rest with a plain sleep.
+    LEFT=$(($1 - $(date +%s)))
+    if [ "$LEFT" -gt 0 ]; then
+        sleep "$LEFT"
+    fi
+}
+
+NOWIFI=0
+NET_DUE=1
+NET_TRIES=0
+NET_HOUR=""
+
 while true; do
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Top of loop (awake!)." >> $LOG
+    rotate_log
+    ### powerd can drop this across wifi and power state changes; keep it set
+    lipc-set-prop com.lab126.powerd preventScreenSaver 1
     ### Backlight off
     echo -n 0 > $BACKLIGHT
 
-    MINUTE=`date "+%M"`
+    ### One date call, so the time drawn and the time we plan from agree.
+    NOWSTR=$(date '+%s|%M|%Y%m%d%H|%H:%M|%A, %-d. %B %Y')
+    DRAWN_AT=${NOWSTR%%|*};  NOWSTR=${NOWSTR#*|}
+    MINUTE=${NOWSTR%%|*};    NOWSTR=${NOWSTR#*|}
+    HOUR_KEY=${NOWSTR%%|*};  NOWSTR=${NOWSTR#*|}
+    TIME=${NOWSTR%%|*}
+    DATE=${NOWSTR#*|}
 
-    ### Once an hour, clear out accumulated e-ink ghosting.
-    if [ "$MINUTE" = "00" ]; then
+    ### Once an hour: clear out e-ink ghosting and schedule a network update.
+    if [ "$MINUTE" = "00" ] && [ "$HOUR_KEY" != "$NET_HOUR" ]; then
+        NET_HOUR=$HOUR_KEY
+        NET_DUE=1
+        NET_TRIES=0
         clear_screen
     fi
 
     ### Draw FIRST. Nothing below this point may delay what is on screen.
-    ### Waiting for wifi used to happen up here, which meant that on an hour
-    ### where the network was down the display sat on the previous minute
-    ### for the ~40s the retry loop took, and the clock looked like it was
-    ### running late.
     #BAT=$(gasgauge-info -s)
     BAT="?"
     if [ -r "$BATTERY" ]; then
         BAT=$(cat $BATTERY)
     fi
-    TIME=$(date '+%H:%M')
-    DATE=$(date '+%A, %-d. %B %Y')
 
     ## coordinates are scaled from a PW4 landscape canvas (1448x1072)
     $FBINK -b -c -m -t $FONT,size=150,top=$TIME_TOP,bottom=0,left=0,right=0 "$TIME"
@@ -339,60 +430,19 @@ while true; do
     ### update framebuffer
     $FBINK -w -s
 
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Battery: $BAT" >> $LOG
+    log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
 
-    ### Screen is current now, so the network can take as long as it likes.
-    ### Anything fetched here lands on the next minute's draw.
-    if [ "$MINUTE" = "00" ]; then
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: Enabling Wifi" >> $LOG
-        lipc-set-prop com.lab126.cmd wirelessEnable 1
-        TRYCNT=0
-        NOWIFI=0
-        ### Wait for wifi to come up
-        while wait_for_wifi; do
-            if [ ${TRYCNT} -gt 30 ]; then
-                ### waited long enough
-                echo "`date '+%Y-%m-%d_%H:%M:%S'`: No Wifi... ($TRYCNT)" >> $LOG
-                NOWIFI=1
-                break
-            fi
-            WIFISTATE=$(lipc-get-prop com.lab126.wifid cmState)
-            echo "`date '+%Y-%m-%d_%H:%M:%S'`: Waiting for Wifi... (try $TRYCNT: $WIFISTATE)" >> $LOG
-            ### Are we stuck in READY state?
-            if [ "$WIFISTATE" = "READY" ]; then
-                ### we have to reconnect
-                echo "`date '+%Y-%m-%d_%H:%M:%S'`: Reconnecting to Wifi..." >> $LOG
-                /usr/bin/wpa_cli -i wlan0 reconnect
-            fi
-            sleep 1
-            let TRYCNT=$TRYCNT+1
-        done
-        echo "`date '+%Y-%m-%d_%H:%M:%S'`: wifi: `lipc-get-prop com.lab126.wifid cmState`" >> $LOG
-
-        if [ `lipc-get-prop com.lab126.wifid cmState` = "CONNECTED" ]; then
-            sync_time
-            update_weather
-        fi
+    ### Screen is current now, so the network can take its time.
+    if [ "$NET_DUE" = "1" ]; then
+        network_step
     fi
 
-    ### Disable WIFI
-    lipc-set-prop com.lab126.cmd wirelessEnable 0
-
-    ### Set Wakeuptimer
-	#echo 0 > /sys/class/rtc/rtc1/wakealarm
-	#echo ${WAKEUP_TIME} > /sys/class/rtc/rtc1/wakealarm
+    ### If the work above ran into the next minute, draw that minute now
+    ### rather than sleeping through it.
     NOW=$(date +%s)
-    let WAKEUP_TIME="((($NOW + 59)/60)*60)" # Hack to get next minute
-    let SLEEP_SECS=$WAKEUP_TIME-$NOW
-
-    ### Prevent SLEEP_SECS from being negative or just too small
-    ### if we took too long
-    if [ $SLEEP_SECS -lt 5 ]; then
-        let SLEEP_SECS=$SLEEP_SECS+60
+    if [ $((NOW / 60)) -ne $((DRAWN_AT / 60)) ]; then
+        log "Ran past the minute, redrawing now."
+        continue
     fi
-    rtcwake -d $RTC -m no -s $SLEEP_SECS
-    echo "`date '+%Y-%m-%d_%H:%M:%S'`: Going to sleep for $SLEEP_SECS" >> $LOG
-	### Go into Suspend to Memory (STR)
-	echo "mem" > /sys/power/state
-#    exit
+    sleep_until $(( (NOW / 60 + 1) * 60 ))
 done

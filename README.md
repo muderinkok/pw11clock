@@ -31,6 +31,12 @@ Kurulumdan sonra saat KUAL'de **Clock** olarak da görünür.
 
 Saat çalışırken Kindle arayüzü kapalıdır (`stop lab126_gui`). Çıkmanın tek yolu güç düğmesini ~10 saniye basılı tutup yeniden başlatmak.
 
+**Yeniden başlattıktan sonra wifi kapalı gelir.** Saat, wifi'ı Kindle'ın uçak modu ayarıyla (`com.lab126.cmd wirelessEnable`) kapatıyor ve bu ayar yeniden başlatmada korunuyor. `install.sh` wifi'ı kendisi açıp bağlanmasını bekliyor. Başka bir iş için wifi lazımsa Kindle ayarlarından uçak modunu kapat.
+
+## Günlük (log)
+
+Script her dakika ne yaptığını `/mnt/us/clock.log` dosyasına yazıyor: çizilen saat, pil, Kindle'ın güç durumu (`powerd`), wifi denemeleri, hava durumu. Günde ~85 KB büyüyor, 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
+
 ## PW4 donanım yolları
 
 koreader'ın `KindlePaperWhite4:init()` tanımından alındı:
@@ -67,7 +73,30 @@ Upstream'de wifi ile saat gösterimi iki yerden birbirine bağlıydı ve wifi ç
 
 Saat başı çekilen hava durumu bir sonraki dakikanın çiziminde görünür; saat hiç beklemez.
 
+Wifi adımı da artık dakikayı hiç taşırmıyor: saniye 50'ye kadar bağlantı bekliyor, gelmezse wifi açık bırakılıp bir sonraki dakika tekrar deneniyor (en fazla 5 dakika). Bağlantı dakikanın 30. saniyesinden sonra gelirse `ntpdate` ve hava durumu bir sonraki dakikanın başına erteleniyor. Açılışta da bu adım bir kez çalışıyor, yani saat başlar başlamaz hava durumu geliyor.
+
 `ntpdate` hâlâ var ama artık sadece wifi zaten bağlıyken ve çizimden sonra çalışıyor — ekranı hiçbir şekilde geciktiremez. Tek işi Kindle'ın RTC'sinin zamanla kaymasını toparlamak (upstream'in notuna göre bu RTC epey kayıyor). Sistem saatine hiç dokunulmasını istemezsen `kindle-clock.sh` başındaki `USE_NTP=1` değerini `0` yap.
+
+## Uyku modu: neden artık suspend yok
+
+Upstream her dakikayı çizdikten sonra `rtcwake` ile bir saat çipi alarmı kurup cihazı RAM'e suspend ediyordu. PW4'te bu güvenilir değil: saat bir süre geç uyanıp sonra tamamen durdu (22:31'de donup sabaha kadar öyle kaldı).
+
+Sebebi: Kindle'da uyandırma alarmının sahibi sistemin kendi güç servisi `powerd`. KOReader'ın kaynağında da açıkça yazıyor — *"Kindle only allows setting the RTC via lipc during the ReadyToSuspend state"* — KOReader bu yüzden alarmı kendisi kurmuyor, `powerd`'a `rtcWakeup` ile söylüyor. Bizim script `powerd`'ı atlayıp alarmı doğrudan kuruyordu; ikisi çakışınca alarm kayboluyor ve cihaz uyanmıyor.
+
+Artık `kindle-clock.sh` başında bir ayar var:
+
+```sh
+SLEEP_MODE="awake"
+```
+
+- **`awake`** (varsayılan): cihaz uyanık kalıyor, dakikalar arası düz `sleep`. Saat hiç şaşmıyor. Karşılığı pil: şarja takılıyken önemi yok, pille çalışırken suspend moduna göre çok daha hızlı biter.
+- **`suspend`**: eski pil dostu davranış, deneysel. Güvenlik önlemleri eklendi: alarm her saat çipine kuruluyor ve kurulduğu doğrulanmadan ya da 10 saniyeden az süre kaldıysa suspend edilmiyor (geçmişte kalan bir alarm hiç çalmaz). Erken uyanma ya da başarısız suspend düz `sleep` ile tamamlanıyor. Ama `powerd` çakışması hâlâ olabilir.
+
+Ayrıca her iki modda:
+
+- Çizim ve planlama **tek bir `date` çağrısından** okunuyor; çizilen dakikayla uyku hesabı hep aynı ana dayanıyor.
+- Yapılan iş bir sonraki dakikaya taşarsa uyumadan hemen o dakika çiziliyor. Upstream'in "5 saniyeden az kaldıysa 60 saniye ekle" kuralı o dakikayı atlıyordu.
+- `preventScreenSaver` her dakika yeniden ayarlanıyor, çünkü `powerd` bunu wifi/güç değişimlerinde düşürebiliyor.
 
 ## Hava durumu ikonu ve "Updated" satırı
 
@@ -101,6 +130,8 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
 | iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
 | wifi yoksa | açılışta çıkar, saat başı 31 sn donar | saat etkilenmez |
+| dakikalar arası | `rtcwake` + suspend, PW4'te donuyor | `SLEEP_MODE=awake`, suspend opsiyonel |
+| log | `/dev/null` | `/mnt/us/clock.log`, boyutu sınırlı |
 | hava ikonu | yok | Weather Icons, gece/gündüz |
 | veri yaşı | gösterilmez | `Updated N min/h ago` |
 
