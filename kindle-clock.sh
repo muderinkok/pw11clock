@@ -553,12 +553,12 @@ while true; do
     echo -n 0 > $BACKLIGHT
     ### powerd can drop this across power state changes; keep it set
     lipc-set-prop com.lab126.powerd preventScreenSaver 1
-    ### Every 10 minutes is plenty to follow the battery, and keeps the
-    ### flash (where the log lives) mostly idle.
-    case "$MINUTE" in
-        ?0) log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
-            rotate_log ;;
-    esac
+    ### Once an hour is plenty to follow the battery and to see that the
+    ### clock is alive; wifi and forecast events are logged as they happen.
+    if [ "$MINUTE" = "00" ]; then
+        log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+        rotate_log
+    fi
     network_tick
 
     ### If any of that ran into the next minute, draw that minute now

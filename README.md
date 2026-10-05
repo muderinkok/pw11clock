@@ -35,7 +35,7 @@ Saat wifi'a ve uçak moduna **hiç dokunmuyor**; Kindle'ı yeniden başlattığ�
 
 ## Günlük (log)
 
-Script `/mnt/us/clock.log` dosyasına yazıyor: her 10 dakikada bir çizilen saat, pil ve Kindle'ın güç durumu (`powerd`); ayrıca wifi denemeleri ve tahmin çekimleri. Flash belleği boşta tutmak için her dakika yazılmıyor. 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
+Script `/mnt/us/clock.log` dosyasına yazıyor: saatte bir çizilen saat, pil ve Kindle'ın güç durumu (`powerd`); ayrıca wifi denemeleri ve tahmin çekimleri. Flash belleği boşta tutmak için her dakika yazılmıyor. 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
 
 ## PW4 donanım yolları
 
@@ -124,7 +124,7 @@ Ekranda o anki hava değil, **günün tahmini** var: hava durumu, yağmur olası
 
 - wifi günde ~2 dakika açık (`WIFI_MODE=daily`)
 - tahmin, ikon ve metinler günde bir hesaplanıyor; her dakika sadece çizim
-- log her dakika yerine 10 dakikada bir
+- log her dakika yerine saatte bir
 - tüm işlemci çekirdekleri `powersave`
 
 Tüketimi ölçmek için: `grep Drew /mnt/us/clock.log | sed -n '1p;$p'` — ilk ve son satırdaki pil yüzdesi ile saat farkı.
