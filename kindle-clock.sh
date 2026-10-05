@@ -349,7 +349,19 @@ DATE_TOP=$((580 * SCREEN_H / REF_H))
 COND_TOP=$((721 * SCREEN_H / REF_H))
 TEMP_TOP=$((849 * SCREEN_H / REF_H))
 AGE_TOP=$((1000 * SCREEN_H / REF_H))
-BAT_LEFT=$((1248 * SCREEN_W / REF_W))
+### Battery icon in the top right corner, the percentage to its left.
+BAT_W=$((66 * SCREEN_W / REF_W))
+BAT_H=$((30 * SCREEN_H / REF_H))
+BAT_T=$((3 * SCREEN_W / REF_W)); [ "$BAT_T" -ge 2 ] || BAT_T=2
+NUB_W=$((6 * SCREEN_W / REF_W))
+NUB_H=$((13 * SCREEN_H / REF_H))
+BAT_TOP=$((22 * SCREEN_H / REF_H))
+BAT_X=$((SCREEN_W - 40 * SCREEN_W / REF_W - BAT_W))
+BAT_GAP=$((14 * SCREEN_W / REF_W))
+BAT_TEXT_TOP=$((12 * SCREEN_H / REF_H))
+### wide enough for "100%" should fbink not tell us the real width
+BAT_TEXT_W_FALLBACK=$((115 * SCREEN_W / REF_W))
+BAT_MEASURED=""
 WARN_LEFT=$((70 * SCREEN_W / REF_W))
 
 ### Set lowest cpu clock
@@ -360,6 +372,36 @@ done
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
 clear_screen
+
+### Battery: a small icon filled to the charge level, with the percentage
+### right-aligned against it. fbink draws the shapes as filled rectangles
+### (-k paints a region in the -B colour) and measures the text in its
+### compute mode whenever the number changes, so "9%" and "100%" both end
+### the same distance from the icon.
+draw_battery() {
+    case "$BAT" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    [ "$BAT" -le 100 ] || BAT=100
+
+    if [ "$BAT" != "$BAT_MEASURED" ]; then
+        BAT_MEASURED=$BAT
+        BAT_TEXT_W=$($FBINK -l -t $FONT,size=10,top=0,bottom=0,left=0,right=0,compute "$BAT%" 2>/dev/null \
+            | sed -n 's/.*bbox_width=\([0-9][0-9]*\).*/\1/p')
+        [ -n "$BAT_TEXT_W" ] || BAT_TEXT_W=$BAT_TEXT_W_FALLBACK
+    fi
+
+    ### outline, hollow it out, charge level, terminal nub
+    $FBINK -b -B BLACK -k top=$BAT_TOP,left=$BAT_X,width=$BAT_W,height=$BAT_H
+    $FBINK -b -k top=$((BAT_TOP + BAT_T)),left=$((BAT_X + BAT_T)),width=$((BAT_W - 2 * BAT_T)),height=$((BAT_H - 2 * BAT_T))
+    FILL=$(( (BAT_W - 4 * BAT_T) * BAT / 100 ))
+    if [ "$FILL" -gt 0 ]; then
+        $FBINK -b -B BLACK -k top=$((BAT_TOP + 2 * BAT_T)),left=$((BAT_X + 2 * BAT_T)),width=$FILL,height=$((BAT_H - 4 * BAT_T))
+    fi
+    $FBINK -b -B BLACK -k top=$((BAT_TOP + (BAT_H - NUB_H) / 2)),left=$((BAT_X + BAT_W)),width=$NUB_W,height=$NUB_H
+
+    $FBINK -b -t $FONT,size=10,top=$BAT_TEXT_TOP,bottom=0,left=$((BAT_X - BAT_GAP - BAT_TEXT_W)),right=0 "$BAT%"
+}
 
 ### The network runs in the background. The drawing loop only ever reads the
 ### file this leaves behind, so a slow connection, a hung DNS lookup or a
@@ -531,7 +573,7 @@ while true; do
     ## coordinates are scaled from a PW4 landscape canvas (1448x1072)
     $FBINK -b -c -m -t $FONT,size=150,top=$TIME_TOP,bottom=0,left=0,right=0 "$TIME"
     $FBINK -b -m -t $FONT,size=20,top=$DATE_TOP,bottom=0,left=0,right=0 "$DATE"
-    $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=$BAT_LEFT,right=0 "Bat: $BAT"
+    draw_battery
     $FBINK -b -m -t $FONT,size=20,top=$COND_TOP,bottom=0,left=0,right=0 "$COND"
     if [ -n "$FC_ICON" ]; then
         ### The icon font goes in as the "bold" face, so **...** switches to it

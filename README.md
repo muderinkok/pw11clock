@@ -129,6 +129,10 @@ Ekranda o anki hava değil, **günün tahmini** var: hava durumu, yağmur olası
 
 Tüketimi ölçmek için: `grep Drew /mnt/us/clock.log | sed -n '1p;$p'` — ilk ve son satırdaki pil yüzdesi ile saat farkı.
 
+## Pil göstergesi
+
+Sağ üstte, doluluğuyla orantılı bir pil ikonu ve solunda yüzde (`96%`). İkon fbink'le dolu dikdörtgenlerden çiziliyor (`-k` bölgeyi `-B` rengine boyuyor), ek font gerekmiyor. Yüzdenin genişliği fbink'in `compute` moduyla ölçülüyor — sadece değer değiştiğinde — böylece `9%` da `100%` da ikona aynı mesafede bitiyor. Pil okunamazsa hiçbir şey çizilmiyor.
+
 ## Ekran yerleşimi
 
 Koordinatlar PW4 yatay tuvaline (1448x1072) göre yazıldı, ama açılışta `fbink -e` ile gerçek çözünürlük okunup ölçekleniyor — PW2'de de PW5'te de bozulmuyor.
@@ -153,6 +157,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | wifi yönetimi | her saat uçak modunu açıp kapatır | günde bir wifid ile açıp kapatır, uçak moduna dokunmaz; ağ işleri arka planda |
 | dakikalar arası | `rtcwake` + suspend, PW4'te donuyor | `SLEEP_MODE=awake`, suspend opsiyonel |
 | log | `/dev/null` | `/mnt/us/clock.log`, boyutu sınırlı |
+| pil göstergesi | `Bat: 96` yazısı | sağ üstte dolulukla orantılı pil ikonu + `96%` |
 | hava ikonu | yok | Weather Icons, gece/gündüz |
 | veri yaşı | gösterilmez | `Today's forecast` / `Forecast for <gün>` |
 
