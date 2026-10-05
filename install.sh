@@ -60,13 +60,18 @@ if [ "$AUTORUN" = "probe" ]; then
     exit 0
 fi
 
-### The clock turns wifi off with the kindle's airplane-mode switch, and that
-### survives a reboot. Turn it back on and wait for a connection first.
+### The clock keeps wifi switched off between its daily fetches (and older
+### versions used airplane mode for it). Undo both and join the network the
+### clock remembered, then wait for a connection.
 ensure_wifi() {
     command -v lipc-get-prop >/dev/null 2>&1 || return 0
     [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" = "CONNECTED" ] && return 0
     echo "  wifi is off, turning it on..."
     lipc-set-prop com.lab126.cmd wirelessEnable 1
+    lipc-set-prop -i com.lab126.wifid enable 1
+    if [ -r "$DEST/wifi_ssid" ]; then
+        lipc-set-prop -s com.lab126.cmd ensureConnection "wifi:$(cat "$DEST/wifi_ssid")"
+    fi
     WAITED=0
     while [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" != "CONNECTED" ]; do
         if [ "$WAITED" -ge 60 ]; then

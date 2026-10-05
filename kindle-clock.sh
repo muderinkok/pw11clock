@@ -10,8 +10,22 @@ LOG="/mnt/us/clock.log"
 FBINK_BIN="/mnt/us/koreader/fbink"
 FONT="regular=/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
 #FONT="regular=/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf"
-CITY="Istanbul"
 USE_NTP=1
+
+### Daily forecast from open-meteo.com (free, no API key). This is Istanbul.
+LAT="41.01"
+LON="28.98"
+### The forecast is fetched once a day, at this hour or as soon after it as
+### the network allows. It covers today and tomorrow, so at midnight the
+### screen moves on to the right day without needing the network.
+FORECAST_HOUR=5
+
+### What to do with wifi.
+###   daily  switch wifi on for the morning fetch and off again straight
+###          after, instead of leaving it on all day. Airplane mode is never
+###          touched (see wifi_on).
+###   leave  never touch wifi; fetch whenever the kindle happens to be online.
+WIFI_MODE="daily"
 
 ### How to wait between minutes.
 ###   awake    stay awake and sleep. Keeps exact time; costs battery, which
@@ -22,10 +36,8 @@ USE_NTP=1
 SLEEP_MODE="awake"
 COND="---"
 TEMP="---"
-WX_SYM=""
-WX_AT=""
-SUNRISE=""
-SUNSET=""
+FC_ICON=""
+FC_LABEL=""
 
 ### The clock runs in landscape, which is what writing to the fb rotate
 ### node achieves. 0 is confirmed to give landscape on a PW4; if some other
@@ -75,111 +87,161 @@ wifi_connected() {
 }
 
 
-### Updates weather info. One request fetches everything:
-###   %x  condition as a plain ascii symbol -- language independent, picks the icon
-###   %S  sunrise, %s sunset -- to choose day or night icons
-###   %C  condition text, %t temperature
-WX_FORMAT="%x+%S+%s+%C,+%t"
-fetch_weather() {
-    WEATHER=$(curl -s -f -m 5 "https://wttr.in/$CITY?format=$WX_FORMAT")
+### Wifi on/off through wifid only. The airplane-mode switch
+### (com.lab126.cmd wirelessEnable) is never touched: it survives a reboot,
+### and after it this kindle does not rejoin its network on its own. Turning
+### on follows koreader: enable wifid, then ask cmd to connect to the saved
+### network by name.
+wifi_on() {
+    lipc-set-prop -i com.lab126.wifid enable 1
+    if [ -n "$WIFI_SSID" ]; then
+        lipc-set-prop -s com.lab126.cmd ensureConnection "wifi:$WIFI_SSID"
+    fi
+}
+
+wifi_off() {
+    lipc-set-prop -i com.lab126.wifid enable 0
+}
+
+### The network to rejoin is the one the kindle was on the last time we saw
+### it connected, kept across restarts.
+SSID_FILE="$SCRIPT_DIR/wifi_ssid"
+remember_ssid() {
+    S=$(wpa_cli -i wlan0 status 2>/dev/null | sed -n 's/^ssid=//p')
+    if [ -n "$S" ] && [ "$S" != "$WIFI_SSID" ]; then
+        WIFI_SSID="$S"
+        printf '%s' "$S" > "$SSID_FILE"
+        log "Remembering wifi network '$S'."
+    fi
+}
+
+### open-meteo daily forecast as csv. The data rows look like
+###   time,weather_code (wmo code),temperature_2m_max (°C),temperature_2m_min (°C),precipitation_probability_max (%)
+###   2026-10-05,3,22.1,14.3,40
+FORECAST_CACHE="$SCRIPT_DIR/forecast.csv"
+FORECAST_QUERY="latitude=$LAT&longitude=$LON&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=2&format=csv"
+
+fetch_forecast() {
+    F=$(curl -s -f -m 15 "https://api.open-meteo.com/v1/forecast?$FORECAST_QUERY")
     RC=$?
-    ### old kindle CA bundles can fail TLS; plain http still works on wttr.in
-    if [ -z "$WEATHER" ]; then
-        WEATHER=$(curl -s -f -m 5 "http://wttr.in/$CITY?format=$WX_FORMAT")
+    ### old kindle CA bundles can fail TLS; try plain http before giving up
+    if [ -z "$F" ]; then
+        F=$(curl -s -f -m 15 "http://api.open-meteo.com/v1/forecast?$FORECAST_QUERY")
         RC=$?
     fi
-    log "Got weather data. ($WEATHER, RC=$RC)"
-    printf '%s' "$WEATHER"
+    log "Got forecast (rc=$RC): $(printf '%s\n' "$F" | forecast_rows | tr '\n' ' ')"
+    printf '%s' "$F"
 }
 
-### Parses a wttr.in line (as fetched above) into the display variables.
-parse_weather() {
-    WEATHER="$1"
-
-    ### Split with parameter expansion only: %x can be "*" or "**", which an
-    ### unquoted word split would glob against the current directory.
-    W_REST="$WEATHER"
-    W_SYM="${W_REST%% *}";  W_REST="${W_REST#* }"
-    W_RISE="${W_REST%% *}"; W_REST="${W_REST#* }"
-    W_SET="${W_REST%% *}";  W_REST="${W_REST#* }"
-
-    ### wttr.in answers some failures with a 200 and a sentence of text.
-    ### Only take the data if the sunrise field looks like a time.
-    case "$W_RISE" in
-        [0-9?][0-9?]:[0-9?][0-9?]*) ;;
-        *)
-            log "Ignoring weather response."
-            return 1
-            ;;
-    esac
-
-    WX_SYM="$W_SYM"
-    SUNRISE="$W_RISE"
-    SUNSET="$W_SET"
-    COND="${W_REST%,*}"
-    TEMP=$(echo "${W_REST##*,}" | sed 's/^ *//; s/+//')
-    WX_AT=$(date +%s)
-    log "Processed weather data. ($WX_SYM // $TEMP // $COND // $SUNRISE-$SUNSET)"
+### The data rows of the csv: everything after its "time," header.
+forecast_rows() {
+    awk -F, 'f && NF > 1 { print } /^time,/ { f = 1 }'
 }
 
-### Minutes since midnight for an HH:MM[:SS] string; fails if it isn't one.
-to_minutes() {
+### WMO weather code (open-meteo's weather_code) as text.
+wmo_text() {
     case "$1" in
-        [0-2][0-9]:[0-5][0-9]*) ;;
-        *) return 1 ;;
+        0)        echo "Clear sky" ;;
+        1)        echo "Mainly clear" ;;
+        2)        echo "Partly cloudy" ;;
+        3)        echo "Overcast" ;;
+        45|48)    echo "Fog" ;;
+        51|53|55) echo "Drizzle" ;;
+        56|57)    echo "Freezing drizzle" ;;
+        61)       echo "Light rain" ;;
+        63)       echo "Rain" ;;
+        65)       echo "Heavy rain" ;;
+        66|67)    echo "Freezing rain" ;;
+        71)       echo "Light snow" ;;
+        73)       echo "Snow" ;;
+        75)       echo "Heavy snow" ;;
+        77)       echo "Snow grains" ;;
+        80)       echo "Light showers" ;;
+        81)       echo "Showers" ;;
+        82)       echo "Heavy showers" ;;
+        85|86)    echo "Snow showers" ;;
+        95)       echo "Thunderstorm" ;;
+        96|99)    echo "Thunderstorm, hail" ;;
+        *)        echo "---" ;;
     esac
-    TM_H=${1%%:*}; TM_M=${1#*:}; TM_M=${TM_M%%:*}
-    ### strip one leading zero so $(( )) does not read "08" as octal
-    TM_H=${TM_H#0}; TM_M=${TM_M#0}
-    echo $(( ${TM_H:-0} * 60 + ${TM_M:-0} ))
 }
 
-### True between sunset and sunrise, using wttr.in's times for the city and
-### 07:00 / 19:00 if it did not give any.
-is_night() {
-    NOW_M=$(to_minutes "$(date '+%H:%M')") || return 1
-    RISE_M=$(to_minutes "$SUNRISE") || RISE_M=420
-    SET_M=$(to_minutes "$SUNSET") || SET_M=1140
-    [ "$NOW_M" -lt "$RISE_M" ] || [ "$NOW_M" -ge "$SET_M" ]
-}
-
-### Prints the Weather Icons glyph for the current %x symbol. Codepoints are
-### from erikflowers/weather-icons (values/weathericons.xml), written as the
-### utf-8 octal bytes printf understands.
-weather_icon() {
-    if is_night; then N=1; else N=0; fi
-    case "$WX_SYM" in
-        o)        [ $N = 1 ] && G='\357\200\256' || G='\357\200\215' ;; # night-clear / day-sunny
-        m)        [ $N = 1 ] && G='\357\202\206' || G='\357\200\202' ;; # night-alt-cloudy / day-cloudy
-        mm|mmm)   G='\357\200\223' ;;                                   # cloudy
-        =)        G='\357\200\224' ;;                                   # fog
-        .)        [ $N = 1 ] && G='\357\200\251' || G='\357\200\211' ;; # night-alt-showers / day-showers
-        /)        G='\357\200\234' ;;                                   # sprinkle
-        //)       G='\357\200\232' ;;                                   # showers
-        ///)      G='\357\200\231' ;;                                   # rain
-        x|x/)     G='\357\202\265' ;;                                   # sleet
-        \*|\*\*)  G='\357\200\233' ;;                                   # snow
-        \*/|\*/\*) [ $N = 1 ] && G='\357\200\252' || G='\357\200\212' ;; # night-alt-snow / day-snow
-        !/)       [ $N = 1 ] && G='\357\200\254' || G='\357\200\216' ;; # night-alt-storm-showers / day-storm-showers
-        /!/)      G='\357\200\236' ;;                                   # thunderstorm
-        \*!\*)    [ $N = 1 ] && G='\357\201\255' || G='\357\201\253' ;; # night-alt-/day-snow-thunderstorm
-        *)        return 1 ;;
+### Weather Icons glyph for a WMO code. Codepoints from erikflowers/weather-icons
+### (values/weathericons.xml) as the utf-8 octal bytes printf understands. Day
+### variants only: this is a forecast for the whole day.
+wmo_icon() {
+    case "$1" in
+        0)              G='\357\200\215' ;; # day-sunny
+        1)              G='\357\200\214' ;; # day-sunny-overcast
+        2)              G='\357\200\202' ;; # day-cloudy
+        3)              G='\357\200\223' ;; # cloudy
+        45|48)          G='\357\200\224' ;; # fog
+        51|53|55)       G='\357\200\234' ;; # sprinkle
+        56|57|66|67)    G='\357\202\265' ;; # sleet
+        61|80)          G='\357\200\211' ;; # day-showers
+        63|81)          G='\357\200\232' ;; # showers
+        65|82)          G='\357\200\231' ;; # rain
+        71|73|75|77)    G='\357\200\233' ;; # snow
+        85|86)          G='\357\200\212' ;; # day-snow
+        95|96|99)       G='\357\200\236' ;; # thunderstorm
+        *)              return 1 ;;
     esac
     printf "$G"
 }
 
-### "Updated 12 min ago", so a stale forecast is obvious at a glance.
-weather_age() {
-    [ -n "$WX_AT" ] || return 1
-    AGE=$(( ($(date +%s) - WX_AT) / 60 ))
-    [ "$AGE" -ge 0 ] || AGE=0
-    if [ "$AGE" -lt 1 ]; then
-        echo "Updated just now"
-    elif [ "$AGE" -lt 60 ]; then
-        echo "Updated $AGE min ago"
+### Loads forecast csv text: remembers the day it was fetched (its first row)
+### and makes the next draw pick the row to show.
+load_forecast() {
+    FC_CSV="$1"
+    FC_FIRST=$(printf '%s\n' "$FC_CSV" | forecast_rows | head -n 1)
+    FC_FIRST=${FC_FIRST%%,*}
+    FC_SHOWN=""
+}
+
+### Turns today's row into what is drawn. With no row for today (the daily
+### fetch has been failing for a while) the latest day there is gets shown,
+### labelled with its date so it is obviously stale.
+select_forecast() {
+    ROWS=$(printf '%s\n' "$FC_CSV" | forecast_rows)
+    ROW=$(printf '%s\n' "$ROWS" | awk -F, -v d="$TODAY" '$1 == d { print; exit }')
+    [ -n "$ROW" ] || ROW=$(printf '%s\n' "$ROWS" | tail -n 1)
+    [ -n "$ROW" ] || return 1
+
+    FC_DATE=${ROW%%,*}; R=${ROW#*,}
+    FC_CODE=${R%%,*};   R=${R#*,}
+    F_MAX=${R%%,*};     R=${R#*,}
+    F_MIN=${R%%,*};     F_RAIN=${R#*,}
+
+    COND=$(wmo_text "$FC_CODE")
+    ### Chance of rain: on its own for a wet day ("Rain (80%)"), spelled out
+    ### for a dry one that might still turn ("Partly cloudy, 40% rain").
+    case "$F_RAIN" in
+        [0-9]|[0-9][0-9]|100)
+            if [ "$FC_CODE" -ge 51 ] 2>/dev/null; then
+                COND="$COND ($F_RAIN%)"
+            elif [ "$F_RAIN" -ge 30 ]; then
+                COND="$COND, $F_RAIN% rain"
+            fi
+            ;;
+    esac
+    TEMP=$(awk -v a="$F_MAX" -v b="$F_MIN" 'BEGIN {
+        if (a !~ /^-?[0-9.]+$/ || b !~ /^-?[0-9.]+$/) exit 1
+        printf "%d° / %d°", sprintf("%.0f", a), sprintf("%.0f", b) }') || TEMP="---"
+    FC_ICON=""
+    [ -r "$ICON_FONT" ] && FC_ICON=$(wmo_icon "$FC_CODE")
+    if [ "$FC_DATE" = "$TODAY" ]; then
+        FC_LABEL="Today's forecast"
     else
-        echo "Updated $((AGE / 60)) h ago"
+        FC_LABEL="Forecast for $(date -d "$FC_DATE" '+%a %-d %b' 2>/dev/null || echo "$FC_DATE")"
     fi
+    log "Showing forecast for $FC_DATE: $COND, $TEMP"
+}
+
+### Due once a day: when the forecast we have was not fetched today and it
+### is FORECAST_HOUR or later -- or straight away if we have none at all.
+forecast_due() {
+    [ -z "$FC_FIRST" ] && return 0
+    [ "$FC_FIRST" != "$TODAY" ] && [ "${HOUR#0}" -ge "$FORECAST_HOUR" ]
 }
 
 ### The screen always shows the kindle's own clock. This only nudges that
@@ -291,17 +353,17 @@ BAT_LEFT=$((1248 * SCREEN_W / REF_W))
 WARN_LEFT=$((70 * SCREEN_W / REF_W))
 
 ### Set lowest cpu clock
-echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+for GOVERNOR in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    echo powersave > "$GOVERNOR" 2>/dev/null
+done
 ### Disable Screensaver
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
 clear_screen
 
-### The network runs in the background and never touches wifi: no airplane
-### mode, no reconnects. Whatever state the kindle's wifi is in, we use it
-### if it is connected and otherwise try again next minute. The drawing loop
-### only ever reads a file this leaves behind, so a hung DNS lookup, a slow
-### ntpdate or a dead network cannot delay the time on screen.
+### The network runs in the background. The drawing loop only ever reads the
+### file this leaves behind, so a slow connection, a hung DNS lookup or a
+### dead network cannot delay the time on screen.
 STATE_DIR="/tmp/pw11clock"
 FETCH_PID=""
 FETCH_STARTED=0
@@ -313,23 +375,53 @@ fetch_running() {
 start_fetch() {
     FETCH_STARTED=$(date +%s)
     (
-        sync_time
-        W=$(fetch_weather)
-        if [ -n "$W" ]; then
-            printf '%s' "$W" > "$STATE_DIR/weather.tmp" && mv "$STATE_DIR/weather.tmp" "$STATE_DIR/weather"
+        if [ "$WIFI_MODE" = "daily" ]; then
+            wifi_on
+            WAITED=0
+            while ! wifi_connected && [ "$WAITED" -lt 120 ]; do
+                sleep 2
+                WAITED=$((WAITED + 2))
+            done
+        fi
+        if wifi_connected; then
+            remember_ssid
+            sync_time
+            F=$(fetch_forecast)
+            if [ -n "$F" ]; then
+                printf '%s' "$F" > "$STATE_DIR/forecast.tmp" && mv "$STATE_DIR/forecast.tmp" "$STATE_DIR/forecast"
+            fi
+        else
+            log "Wifi did not connect."
+            : > "$STATE_DIR/nowifi"
+        fi
+        if [ "$WIFI_MODE" = "daily" ]; then
+            wifi_off
         fi
     ) > /dev/null 2>&1 &
     FETCH_PID=$!
 }
 
-### Called after every draw. Cheap: one lipc query at most.
+### Called after every draw; normally does nothing at all.
 network_tick() {
-    ### Pick up anything a finished fetch left behind.
-    if [ -f "$STATE_DIR/weather" ]; then
-        if parse_weather "$(cat "$STATE_DIR/weather")"; then
-            NET_DUE=0
-        fi
-        rm -f "$STATE_DIR/weather"
+    ### Pick up whatever a finished fetch left behind.
+    if [ -f "$STATE_DIR/forecast" ]; then
+        F=$(cat "$STATE_DIR/forecast")
+        rm -f "$STATE_DIR/forecast"
+        case "$(printf '%s\n' "$F" | forecast_rows | head -n 1)" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9],*)
+                printf '%s' "$F" > "$FORECAST_CACHE"
+                load_forecast "$F"
+                NOWIFI=0
+                log "Forecast updated."
+                ;;
+            *)
+                log "Ignoring forecast response."
+                ;;
+        esac
+    fi
+    if [ -f "$STATE_DIR/nowifi" ]; then
+        rm -f "$STATE_DIR/nowifi"
+        NOWIFI=1
     fi
 
     if fetch_running; then
@@ -337,21 +429,21 @@ network_tick() {
         if [ $(( $(date +%s) - FETCH_STARTED )) -gt 300 ]; then
             log "Fetch hung, killing it."
             kill "$FETCH_PID" 2>/dev/null
+            [ "$WIFI_MODE" = "daily" ] && wifi_off
         fi
         return 0
     fi
 
-    [ "$NET_DUE" = "1" ] || return 0
-    if wifi_connected; then
-        NOWIFI=0
-        ### one attempt every 5 minutes while the data is still due
-        if [ $(( $(date +%s) - FETCH_STARTED )) -ge 300 ]; then
-            log "Fetching weather in the background."
-            start_fetch
-        fi
-    else
+    forecast_due || return 0
+    ### while it is due, one attempt every 15 minutes
+    [ $(( $(date +%s) - FETCH_STARTED )) -ge 900 ] || return 0
+    if [ "$WIFI_MODE" = "leave" ] && ! wifi_connected; then
         NOWIFI=1
+        return 0
     fi
+    [ -r "$SSID_FILE" ] && WIFI_SSID=$(cat "$SSID_FILE")
+    log "Fetching forecast in the background."
+    start_fetch
 }
 
 ### Arms a wake alarm $1 seconds out on every rtc that takes one. Fails if
@@ -387,27 +479,46 @@ sleep_until() {
 }
 
 mkdir -p "$STATE_DIR"
-rm -f "$STATE_DIR/weather" "$STATE_DIR/weather.tmp"
+rm -f "$STATE_DIR/forecast" "$STATE_DIR/forecast.tmp" "$STATE_DIR/nowifi"
 NOWIFI=0
-NET_DUE=1
-NET_HOUR=""
+FLASHED=""
+FC_CSV=""
+FC_FIRST=""
+FC_SHOWN=""
+[ -r "$FORECAST_CACHE" ] && load_forecast "$(cat "$FORECAST_CACHE")"
+WIFI_SSID=""
+[ -r "$SSID_FILE" ] && WIFI_SSID=$(cat "$SSID_FILE")
+wifi_connected && remember_ssid
+log "wifi=$WIFI_MODE ssid='$WIFI_SSID' forecast from ${FC_FIRST:-none}"
+### In daily mode wifi has no business being on until the next fetch.
+TODAY=$(date +%Y-%m-%d)
+HOUR=$(date +%H)
+if [ "$WIFI_MODE" = "daily" ] && ! forecast_due; then
+    wifi_off
+fi
 
 while true; do
     ### Draw FIRST, straight after waking. Nothing may run before this.
     ### One date call, so the time drawn and the time we plan from agree.
-    NOWSTR=$(date '+%s|%M|%Y%m%d%H|%H:%M|%A, %-d. %B %Y')
-    DRAWN_AT=${NOWSTR%%|*};  NOWSTR=${NOWSTR#*|}
-    MINUTE=${NOWSTR%%|*};    NOWSTR=${NOWSTR#*|}
-    HOUR_KEY=${NOWSTR%%|*};  NOWSTR=${NOWSTR#*|}
+    NOWSTR=$(date '+%s|%M|%H|%Y-%m-%d|%H:%M|%A, %-d. %B %Y')
+    DRAWN_AT=${NOWSTR%%|*}; NOWSTR=${NOWSTR#*|}
+    MINUTE=${NOWSTR%%|*};   NOWSTR=${NOWSTR#*|}
+    HOUR=${NOWSTR%%|*};     NOWSTR=${NOWSTR#*|}
+    TODAY=${NOWSTR%%|*};    NOWSTR=${NOWSTR#*|}
     TIME=${NOWSTR%%|*}
     DATE=${NOWSTR#*|}
 
-    ### Once an hour: flash the refresh to clear e-ink ghosting, and make a
-    ### weather update due.
+    ### Once a day, or right after new data: choose what to show. Local work
+    ### only, a few milliseconds.
+    if [ "$FC_SHOWN" != "$TODAY" ] && [ -n "$FC_CSV" ]; then
+        select_forecast
+        FC_SHOWN=$TODAY
+    fi
+
+    ### Once an hour, flash the refresh to clear e-ink ghosting.
     FLASH=""
-    if [ "$MINUTE" = "00" ] && [ "$HOUR_KEY" != "$NET_HOUR" ]; then
-        NET_HOUR=$HOUR_KEY
-        NET_DUE=1
+    if [ "$MINUTE" = "00" ] && [ "$FLASHED" != "$TODAY$HOUR" ]; then
+        FLASHED=$TODAY$HOUR
         FLASH="-f"
     fi
 
@@ -422,19 +533,15 @@ while true; do
     $FBINK -b -m -t $FONT,size=20,top=$DATE_TOP,bottom=0,left=0,right=0 "$DATE"
     $FBINK -b    -t $FONT,size=10,top=0,bottom=0,left=$BAT_LEFT,right=0 "Bat: $BAT"
     $FBINK -b -m -t $FONT,size=20,top=$COND_TOP,bottom=0,left=0,right=0 "$COND"
-    ICON=""
-    if [ -r "$ICON_FONT" ]; then
-        ICON=$(weather_icon)
-    fi
-    if [ -n "$ICON" ]; then
+    if [ -n "$FC_ICON" ]; then
         ### The icon font goes in as the "bold" face, so **...** switches to it
-        ### mid-line and fbink still centres icon + temperature as one line.
-        $FBINK -b -m -t $FONT,bold=$ICON_FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0,format "**$ICON**  $TEMP"
+        ### mid-line and fbink still centres icon + temperatures as one line.
+        $FBINK -b -m -t $FONT,bold=$ICON_FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0,format "**$FC_ICON**  $TEMP"
     else
         $FBINK -b -m -t $FONT,size=30,top=$TEMP_TOP,bottom=0,left=0,right=0 "$TEMP"
     fi
-    if AGE_TEXT=$(weather_age); then
-        $FBINK -b -m -t $FONT,size=10,top=$AGE_TOP,bottom=0,left=0,right=0 "$AGE_TEXT"
+    if [ -n "$FC_LABEL" ]; then
+        $FBINK -b -m -t $FONT,size=10,top=$AGE_TOP,bottom=0,left=0,right=0 "$FC_LABEL"
     fi
     if [ "$NOWIFI" = "1" ]; then
         $FBINK -b -t $FONT,size=10,top=0,bottom=0,left=$WARN_LEFT,right=0 "No Wifi!"
@@ -446,8 +553,12 @@ while true; do
     echo -n 0 > $BACKLIGHT
     ### powerd can drop this across power state changes; keep it set
     lipc-set-prop com.lab126.powerd preventScreenSaver 1
-    log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
-    rotate_log
+    ### Every 10 minutes is plenty to follow the battery, and keeps the
+    ### flash (where the log lives) mostly idle.
+    case "$MINUTE" in
+        ?0) log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+            rotate_log ;;
+    esac
     network_tick
 
     ### If any of that ran into the next minute, draw that minute now

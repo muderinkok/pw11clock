@@ -2,7 +2,7 @@
 
 [mattzzw/kindle-clock](https://github.com/mattzzw/kindle-clock) fork'u — jailbreak'li bir Kindle'ı saat + hava durumu ekranına çeviriyor. **Paperwhite 4 (10. nesil, Rex/Moonshine)** için ayarlandı.
 
-Her dakika ekranı tazeler, dakikanın kalanında cihazı RAM'e suspend eder. Saat başı wifi'yi açıp `ntpdate` ile saati, `wttr.in`'den hava durumunu günceller.
+Her dakika ekranı tazeler. Günde bir kez (sabah 05:00) wifi'ı kısa süreliğine açıp `ntpdate` ile saati düzeltir ve [Open-Meteo](https://open-meteo.com)'dan günün tahminini çeker; geri kalan zamanda wifi kapalıdır.
 
 Ekran **yatay** kullanılıyor (upstream'deki gibi) — tuval PW4'te 1448x1072.
 
@@ -35,7 +35,7 @@ Saat wifi'a ve uçak moduna **hiç dokunmuyor**; Kindle'ı yeniden başlattığ�
 
 ## Günlük (log)
 
-Script her dakika ne yaptığını `/mnt/us/clock.log` dosyasına yazıyor: çizilen saat, pil, Kindle'ın güç durumu (`powerd`), wifi denemeleri, hava durumu. Günde ~85 KB büyüyor, 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
+Script `/mnt/us/clock.log` dosyasına yazıyor: her 10 dakikada bir çizilen saat, pil ve Kindle'ın güç durumu (`powerd`); ayrıca wifi denemeleri ve tahmin çekimleri. Flash belleği boşta tutmak için her dakika yazılmıyor. 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
 
 ## PW4 donanım yolları
 
@@ -59,14 +59,23 @@ Diğer modellerin blokları dosyanın başında yorum satırı olarak duruyor. A
 
 **Ekrandaki saat her zaman Kindle'ın sistem saati** (`date`), ve bunun wifi ile hiçbir bağı yok:
 
-- **Script wifi'a dokunmuyor.** Uçak modu, yeniden bağlanma, `wpa_cli` yok. Wifi Kindle'ın kendi işi; bağlıysa kullanılıyor, değilse bir sonraki dakika tekrar bakılıyor.
-- **İnternet işleri arka planda.** `ntpdate` ve hava durumu ayrı bir süreçte çalışıyor ve sonucu bir dosyaya bırakıyor; çizim döngüsü sadece o dosyayı okuyor. DNS asılı kalsa, ağ ölü olsa, istek dakikalarca sürse de ekran bir saniye bile beklemiyor. 5 dakikadan uzun süren bir istek öldürülüyor.
-- **Uyanınca ilk iş çizim.** Pil okuma dışında hiçbir şey çizimden önce çalışmıyor.
-- Hava durumu saat başı ve açılışta "vadesi gelmiş" sayılıyor; wifi bağlıysa en fazla 5 dakikada bir deneniyor, alınana kadar. Wifi yoksa köşede `No Wifi!` çıkıyor ve `Updated N h ago` büyüyor — ama saat hiç etkilenmiyor.
+- **İnternet işleri arka planda.** Wifi'ı açma, bağlanmayı bekleme, `ntpdate` ve tahmin isteği ayrı bir süreçte çalışıyor ve sonucu bir dosyaya bırakıyor; çizim döngüsü sadece o dosyayı okuyor. Ağ ne yaparsa yapsın ekran bir saniye bile beklemiyor. 5 dakikadan uzun süren bir iş öldürülüyor.
+- **Uyanınca ilk iş çizim.**
 
-Upstream'de wifi ile saat iki yerden bağlıydı: açılışta wifi yoksa script çıkıyordu, saat başında da çizim wifi beklemesinden sonra yapılıyordu (wifi yoksa ~31 sn donuyordu). İkisi de gitti.
+### Wifi: günde bir kez (`WIFI_MODE`)
 
-`ntpdate` duruyor (`USE_NTP=1`): sistem saatini düzeltir, ekran da her zaman sistem saatini gösterir. Sistem saatine hiç dokunulmasın istersen `USE_NTP=0`.
+```sh
+WIFI_MODE="daily"
+```
+
+- **`daily`** (varsayılan): wifi sadece sabahki çekim için açılıp hemen kapanıyor. Bütün gün açık kalan wifi pilin bir kısmını yiyordu.
+- **`leave`**: wifi'a hiç dokunma; Kindle zaten bağlıysa çek.
+
+Açma/kapama **uçak moduyla yapılmıyor** (`com.lab126.cmd wirelessEnable` hiç değişmiyor), çünkü uçak modu yeniden başlatmada kalıcı ve bu Kindle ondan sonra ağına kendiliğinden dönmüyordu. Onun yerine KOReader'ın yöntemi: `com.lab126.wifid enable 0/1` ile wifi servisi kapatılıp açılıyor, açarken de kayıtlı ağa adıyla bağlanması isteniyor (`com.lab126.cmd ensureConnection "wifi:<ağ>"`). Ağ adı, saatin Kindle'ı bağlı gördüğü son ağ; `wifi_ssid` dosyasında saklanıyor.
+
+Bağlantı 2 dakika içinde gelmezse wifi tekrar kapatılıp 15 dakika sonra yeniden deneniyor ve köşede `No Wifi!` çıkıyor. Saat hiç etkilenmiyor.
+
+`ntpdate` de günde bir, bu çekimle birlikte çalışıyor (`USE_NTP=1`). Sistem saatine hiç dokunulmasın istersen `USE_NTP=0`.
 
 ## Uyku modu: neden artık suspend yok
 
@@ -89,16 +98,36 @@ Ayrıca her iki modda:
 - Yapılan iş bir sonraki dakikaya taşarsa uyumadan hemen o dakika çiziliyor. Upstream'in "5 saniyeden az kaldıysa 60 saniye ekle" kuralı o dakikayı atlıyordu.
 - `preventScreenSaver` her dakika yeniden ayarlanıyor, çünkü `powerd` bunu wifi/güç değişimlerinde düşürebiliyor.
 
-## Hava durumu ikonu ve "Updated" satırı
+## Hava durumu: günlük tahmin
 
-Sıcaklığın solunda hava durumuna göre bir ikon, altında küçük bir `Updated 12 min ago` satırı var.
+Ekranda o anki hava değil, **günün tahmini** var: hava durumu, yağmur olasılığı, en yüksek / en düşük sıcaklık ve bir ikon.
 
-- **İkon:** Kindle fontları emoji basamıyor, o yüzden [Weather Icons](https://github.com/erikflowers/weather-icons) fontu (`weathericons.ttf`, SIL OFL 1.1) script'in yanında geliyor. Hava tipi wttr.in'in dil bağımsız `%x` kodundan okunuyor (`o` güneşli, `m` parçalı bulutlu, `///` yoğun yağmur, `*` kar...), metinden değil. Font yoksa ya da kod tanınmazsa sadece sıcaklık yazılır.
-- **Gece/gündüz:** wttr.in'den şehrin gün doğumu/batımı da çekiliyor (`%S`, `%s`). Gece güneş yerine ay, bulut yerine gece bulutu gösteriliyor. Bu saatler gelmezse 07:00–19:00 varsayılıyor.
-- **Updated:** son başarılı hava durumu çekiminden beri geçen süre; bir saatin altında dakika, üstünde saat. Wifi çekmediğinde saat başları atlanır ve bu sayı büyür — gösterilen havanın ne kadar eski olduğunu buradan anlarsın.
-- wttr.in bazen hata durumunda düz bir cümleyle cevap veriyor; yanıt beklenen biçimde değilse yok sayılıp eski veri korunuyor.
+```
+        Partly cloudy, 40% rain
+        ☁  22° / 15°
+        Today's forecast
+```
 
-İkon, fbink'in `format` modunda "bold" font olarak veriliyor: `**<ikon>**  21°C`. Böylece ikon ve sıcaklık tek satır olarak ortalanıyor.
+- **Kaynak:** [Open-Meteo](https://open-meteo.com) — ücretsiz, anahtar istemiyor. Kindle'da `jq` olmadığı için JSON yerine CSV çekiliyor (`format=csv`) ve `awk` ile okunuyor. Konum `kindle-clock.sh` başında `LAT`/`LON` (İstanbul).
+- **Ne zaman:** her gün `FORECAST_HOUR` (05) ve sonrasında, o gün henüz çekilmediyse. Açılışta hiç tahmin yoksa hemen.
+- **Bugün ve yarın birlikte çekiliyor**, böylece gece yarısı ekran ağa ihtiyaç duymadan doğru güne geçiyor.
+- **Önbellek:** son başarılı tahmin `forecast.csv` dosyasına yazılıyor; yeniden başlatmadan sonra hemen görünüyor.
+- **Eskiyse belli oluyor:** bugüne ait satır yoksa (çekim günlerce başarısız olduysa) en son gün gösteriliyor ve alt satır `Today's forecast` yerine `Forecast for Mon 5 Oct` oluyor.
+- **Yağmur olasılığı:** yağışlı bir günde `Rain (80%)`, kuru ama %30 ve üstü ihtimalli bir günde `Partly cloudy, 40% rain`.
+- **İkon:** [Weather Icons](https://github.com/erikflowers/weather-icons) fontu (`weathericons.ttf`, SIL OFL 1.1). Open-Meteo'nun WMO hava kodundan seçiliyor; günün tamamı için olduğundan hep gündüz ikonları.
+
+İkon, fbink'in `format` modunda "bold" font olarak veriliyor: `**<ikon>**  22° / 15°`. Böylece ikon ve sıcaklıklar tek satır olarak ortalanıyor.
+
+## Pil
+
+Şarja takılı değilken ~3 gün gidiyordu (uyanık mod, wifi bütün gün açık, her dakika log). Yapılanlar:
+
+- wifi günde ~2 dakika açık (`WIFI_MODE=daily`)
+- tahmin, ikon ve metinler günde bir hesaplanıyor; her dakika sadece çizim
+- log her dakika yerine 10 dakikada bir
+- tüm işlemci çekirdekleri `powersave`
+
+Tüketimi ölçmek için: `grep Drew /mnt/us/clock.log | sed -n '1p;$p'` — ilk ve son satırdaki pil yüzdesi ile saat farkı.
 
 ## Ekran yerleşimi
 
@@ -115,21 +144,23 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 | `FBINK` | MRInstaller içindeki fbink | `/mnt/us/koreader/fbink` |
 | `FONT` | Palatino-Regular | Helvetica_LT_65_Medium |
 | `CITY` | Hamburg | Istanbul |
-| hava | `de.wttr.in` | `wttr.in` (https başarısızsa http'ye düşer) |
+| hava | `de.wttr.in`, saatte bir, o anki hava | Open-Meteo, günde bir, günün tahmini |
 | ntp | `de.pool.ntp.org` | `pool.ntp.org` |
 | donanım | sabit PW2 yolları | PW4 yolları + otomatik fallback |
 | yerleşim | sabit PW2 pikselleri | PW4 referansı, çözünürlüğe göre ölçekli |
 | iç sıcaklık | dış sıcaklığın yanında gösterilir | kaldırıldı, sadece dış sıcaklık |
 | wifi yoksa | açılışta çıkar, saat başı 31 sn donar | saat etkilenmez |
-| wifi yönetimi | her saat uçak modunu açıp kapatır | hiç dokunmaz, ağ işleri arka planda |
+| wifi yönetimi | her saat uçak modunu açıp kapatır | günde bir wifid ile açıp kapatır, uçak moduna dokunmaz; ağ işleri arka planda |
 | dakikalar arası | `rtcwake` + suspend, PW4'te donuyor | `SLEEP_MODE=awake`, suspend opsiyonel |
 | log | `/dev/null` | `/mnt/us/clock.log`, boyutu sınırlı |
 | hava ikonu | yok | Weather Icons, gece/gündüz |
-| veri yaşı | gösterilmez | `Updated N min/h ago` |
+| veri yaşı | gösterilmez | `Today's forecast` / `Forecast for <gün>` |
 
 ## Yapılacaklar
 
-- [ ] **Hava durumu güncelleme sıklığını düşür.** Şu an saatte bir (her `xx:00`) çekiliyor; başarısız olursa alınana kadar 5 dakikada bir yeniden deneniyor. Daha seyrek yapmak için `kindle-clock.sh` döngüsündeki `if [ "$MINUTE" = "00" ] ...` koşulu (orada `NET_DUE=1` yapılıyor) ve `network_tick` içindeki 300 saniyelik yeniden deneme aralığı değiştirilecek. `Updated N h ago` satırı zaten saat cinsinden yaş gösterdiği için ekran tarafında değişiklik gerekmiyor.
+- [x] **Hava durumu güncelleme sıklığını düşür.** Günde bire indi (05:00, günlük tahmin).
+- [ ] **Suspend'i `powerd` üzerinden yap.** Pil için en büyük kazanç; KOReader gibi alarmı `lipc-set-prop com.lab126.powerd rtcWakeup` ile kurmak. Cihazda deneme gerektiriyor.
+- [ ] **Her dakika sadece saat bölgesini tazele.** Tüm ekran yerine saat alanı; tarih ve tahmin sadece değiştiğinde.
 
 ## Dosyalar
 
@@ -137,6 +168,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 * `install.sh` — Kindle'da tek satırlık kurulum + donanım probe
 * `config.xml`, `menu.json` — KUAL menü tanımı
 * `weathericons.ttf`, `LICENSE-weathericons.txt` — hava durumu ikon fontu ve lisansı
+* `forecast.csv`, `wifi_ssid` — cihazda oluşur: son tahmin ve bağlanılacak ağın adı
 
 ## Gereksinimler
 
