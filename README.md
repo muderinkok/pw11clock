@@ -33,9 +33,19 @@ Saat çalışırken Kindle arayüzü kapalıdır (`stop lab126_gui`). Çıkmanı
 
 Saat wifi'a ve uçak moduna **hiç dokunmuyor**; Kindle'ı yeniden başlattığında wifi, saati başlattığında nasılsa öyle. (Eski sürümler wifi'ı uçak moduyla kapatıyordu ve zorla yeniden başlatma script'e onu geri açma fırsatı vermediği için Kindle uçak modunda kalıyordu. `install.sh` bu durumu hâlâ düzeltiyor: bağlı değilse wifi'ı açıp bağlanmayı bekliyor.)
 
+## Sağlık raporu (`d.sh`)
+
+Bir sorun varsa Kindle'ı yeniden başlat, kTerm'de:
+
+```sh
+cd /mnt/us && sh d.sh
+```
+
+ve çıkan ekranın fotoğrafını çek. Tek ekranlık bir rapor: kurulu sürüm, son çalışmadaki pil tüketimi (%/saat ve tahmini gün), geç kalınan dakikalar, Kindle'ın güç servisinin (`powerd`) uyku olayları, işlemci kullanımı, son hava durumu denemeleri; ayrıca canlı olarak wifi durumu ve tahmin sunucusuna her yoldan (https, doğrulamasız https, http) erişim. `install.sh` bu kısayolu `/mnt/us/d.sh` olarak kuruyor.
+
 ## Günlük (log)
 
-Script `/mnt/us/clock.log` dosyasına yazıyor: saatte bir çizilen saat, pil ve Kindle'ın güç durumu (`powerd`); ayrıca wifi denemeleri ve tahmin çekimleri. Flash belleği boşta tutmak için her dakika yazılmıyor. 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
+Script `/mnt/us/clock.log` dosyasına yazıyor: saatte bir çizilen saat, pil, Kindle'ın güç durumu (`powerd`) ve son bir saatin işlemci kullanımı (en çok işlemci harcayan 3 süreçle); olduğu anda da `powerd` ve wifi servisinin olayları (ekran koruyucu, uyku, uyanma, bağlantı), 5 saniyeden geç çizilen dakikalar ("Woke 190s late") ve her tahmin denemesinin curl kodları. Flash belleği boşta tutmak için her dakika yazılmıyor. 256 KB'ı geçince son ~2000 satır tutuluyor. Bir sorun olursa ilk bakılacak yer burası; kTerm'de `tail -50 /mnt/us/clock.log`.
 
 ## PW4 donanım yolları
 
@@ -108,7 +118,7 @@ Ekranda o anki hava değil, **günün tahmini** var: hava durumu, yağmur olası
         Today's forecast
 ```
 
-- **Kaynak:** [Open-Meteo](https://open-meteo.com) — ücretsiz, anahtar istemiyor. Kindle'da `jq` olmadığı için JSON yerine CSV çekiliyor (`format=csv`) ve `awk` ile okunuyor. Konum `kindle-clock.sh` başında `LAT`/`LON` (İstanbul).
+- **Kaynak:** [Open-Meteo](https://open-meteo.com) — ücretsiz, anahtar istemiyor. Önce https, olmazsa sertifika doğrulamasız https (Kindle'ın sertifika deposu bazı güncel kök sertifikaları tanımıyor; bu sadece hava verisi), en son http deneniyor. Kindle'da `jq` olmadığı için JSON yerine CSV çekiliyor (`format=csv`) ve `awk` ile okunuyor. Konum `kindle-clock.sh` başında `LAT`/`LON` (İstanbul).
 - **Ne zaman:** her gün `FORECAST_HOUR` (05) ve sonrasında, o gün henüz çekilmediyse. Açılışta hiç tahmin yoksa hemen.
 - **Bugün ve yarın birlikte çekiliyor**, böylece gece yarısı ekran ağa ihtiyaç duymadan doğru güne geçiyor.
 - **Önbellek:** son başarılı tahmin `forecast.csv` dosyasına yazılıyor; yeniden başlatmadan sonra hemen görünüyor.
@@ -171,6 +181,7 @@ Punto değerleri (`size=150` vb.) hiç değişmiyor: fbink puntoyu panelin DPI'�
 
 * `kindle-clock.sh` — ana döngü: saati basar, RAM'e suspend eder, uyanır
 * `install.sh` — Kindle'da tek satırlık kurulum + donanım probe
+* `diag.sh` — tek ekranlık sağlık raporu (`/mnt/us/d.sh` olarak da kurulur)
 * `config.xml`, `menu.json` — KUAL menü tanımı
 * `weathericons.ttf`, `LICENSE-weathericons.txt` — hava durumu ikon fontu ve lisansı
 * `forecast.csv`, `wifi_ssid` — cihazda oluşur: son tahmin ve bağlanılacak ağın adı

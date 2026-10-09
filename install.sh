@@ -22,7 +22,9 @@ REPO="${REPO:-muderinkok/pw11clock}"
 REF="${REF:-HEAD}"
 BASEURL="${BASEURL:-https://raw.githubusercontent.com/$REPO/$REF}"
 DEST="${DEST:-/mnt/us/extensions/clock}"
-FILES="kindle-clock.sh config.xml menu.json weathericons.ttf LICENSE-weathericons.txt"
+FILES="kindle-clock.sh diag.sh config.xml menu.json weathericons.ttf LICENSE-weathericons.txt"
+### short name for the health report, so it is quick to type in kTerm
+DIAG_LINK="${DIAG_LINK:-/mnt/us/d.sh}"
 
 AUTORUN="ask"
 
@@ -132,7 +134,10 @@ for FILE in $FILES; do
     mv "$DEST/$FILE.new" "$DEST/$FILE"
 done
 
-chmod +x "$DEST/kindle-clock.sh"
+chmod +x "$DEST/kindle-clock.sh" "$DEST/diag.sh"
+if [ -d "$(dirname "$DIAG_LINK")" ]; then
+    printf '#!/bin/sh\nexec sh %s/diag.sh "$@"\n' "$DEST" > "$DIAG_LINK"
+fi
 
 echo ""
 probe

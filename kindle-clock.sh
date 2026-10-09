@@ -1,5 +1,8 @@
 #!/bin/sh
 
+### Shown in the log and by diag.sh, so it is clear which version runs.
+VERSION="2026-10-09"
+
 ### Where this script lives; the weather icon font ships alongside it.
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ICON_FONT="$SCRIPT_DIR/weathericons.ttf"
@@ -121,15 +124,22 @@ remember_ssid() {
 FORECAST_CACHE="$SCRIPT_DIR/forecast.csv"
 FORECAST_QUERY="latitude=$LAT&longitude=$LON&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=2&format=csv"
 
+### Tries https, then https without certificate checks -- the kindle's CA
+### bundle predates the roots some sites now use, and this is only weather --
+### then plain http. Every attempt's curl exit code goes in the log.
 fetch_forecast() {
-    F=$(curl -s -f -m 15 "https://api.open-meteo.com/v1/forecast?$FORECAST_QUERY")
-    RC=$?
-    ### old kindle CA bundles can fail TLS; try plain http before giving up
-    if [ -z "$F" ]; then
-        F=$(curl -s -f -m 15 "http://api.open-meteo.com/v1/forecast?$FORECAST_QUERY")
+    TRIED=""
+    for MODE in https https-k http; do
+        case "$MODE" in
+            https)   F=$(curl -s -f -m 15 "https://api.open-meteo.com/v1/forecast?$FORECAST_QUERY") ;;
+            https-k) F=$(curl -s -f -k -m 15 "https://api.open-meteo.com/v1/forecast?$FORECAST_QUERY") ;;
+            http)    F=$(curl -s -f -m 15 "http://api.open-meteo.com/v1/forecast?$FORECAST_QUERY") ;;
+        esac
         RC=$?
-    fi
-    log "Got forecast (rc=$RC): $(printf '%s\n' "$F" | forecast_rows | tr '\n' ' ')"
+        TRIED="$TRIED $MODE=$RC"
+        [ -n "$F" ] && break
+    done
+    log "Got forecast ($TRIED): $(printf '%s\n' "$F" | forecast_rows | tr '\n' ' ')"
     printf '%s' "$F"
 }
 
@@ -302,7 +312,7 @@ if [ ! -r "${FONT#regular=}" ]; then
 fi
 
 ### Prep Kindle...
-log "------------- Startup ------------"
+log "------------- Startup $VERSION ------------"
 log "fbink=$FBINK_BIN battery=$BATTERY backlight=$BACKLIGHT sleep=$SLEEP_MODE"
 
 $FBINK -w -c -f -m -M -t $FONT,size=20 "Starting Clock..." > /dev/null 2>&1
@@ -457,7 +467,7 @@ network_tick() {
                 log "Forecast updated."
                 ;;
             *)
-                log "Ignoring forecast response."
+                log "Ignoring forecast response: $(printf '%s' "$F" | head -c 80 | tr '\n' ' ')"
                 ;;
         esac
     fi
@@ -518,10 +528,51 @@ sleep_until() {
     if [ "$LEFT" -gt 0 ]; then
         sleep "$LEFT"
     fi
+    ### A sleep only overruns like this if the whole system was suspended
+    ### underneath it; record when, by how much, and what powerd says.
+    LATE=$(($(date +%s) - $1))
+    if [ "$LATE" -ge 5 ]; then
+        log "Woke ${LATE}s late (powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+    fi
+}
+
+### Logs powerd and wifid events as they happen: screensaver, suspend and
+### resume, charging, wifi state changes. Costs nothing while idle, the
+### process just waits on lipc. Wifi signal strength updates are left out.
+watch_events() {
+    for PUBLISHER in com.lab126.powerd com.lab126.wifid; do
+        lipc-wait-event -m -s 0 "$PUBLISHER" '*' 2>/dev/null | while read -r EV; do
+            case "$EV" in
+                signalStrength*) ;;
+                *) log "event ${PUBLISHER#com.lab126.}: $EV" ;;
+            esac
+        done &
+    done
+}
+
+### Once an hour: how busy the cpu was since the last report, and the three
+### processes with the most cpu time so far. Something spinning in the
+### background would eat the battery while the screen looks idle.
+cpu_report() {
+    STAT=$(awk '/^cpu / { t = 0; for (i = 2; i <= NF; i++) t += $i; print t, $5 + $6 }' /proc/stat)
+    TOTAL=${STAT% *}; IDLE=${STAT#* }
+    if [ -n "$CPU_TOTAL" ] && [ "$TOTAL" -gt "$CPU_TOTAL" ]; then
+        BUSY=$(( (TOTAL - CPU_TOTAL - (IDLE - CPU_IDLE)) * 1000 / (TOTAL - CPU_TOTAL) ))
+        TOPP=$(cat /proc/[0-9]*/stat 2>/dev/null | awk '{
+                name = $0; sub(/^[0-9]+ \(/, "", name); sub(/\) .*/, "", name)
+                rest = $0; sub(/.*\) /, "", rest); split(rest, a, " ")
+                print a[12] + a[13], name }' | sort -rn | head -n 3 \
+            | awk '{ printf "%s %ds, ", $2, $1 / 100 }')
+        log "cpu busy $((BUSY / 10)).$((BUSY % 10))% last hour; most cpu: ${TOPP%, }"
+    fi
+    CPU_TOTAL=$TOTAL; CPU_IDLE=$IDLE
 }
 
 mkdir -p "$STATE_DIR"
 rm -f "$STATE_DIR/forecast" "$STATE_DIR/forecast.tmp" "$STATE_DIR/nowifi"
+watch_events
+CPU_TOTAL=""
+cpu_report
 NOWIFI=0
 FLASHED=""
 FC_CSV=""
@@ -599,6 +650,7 @@ while true; do
     ### clock is alive; wifi and forecast events are logged as they happen.
     if [ "$MINUTE" = "00" ]; then
         log "Drew $TIME (bat $BAT, powerd $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+        cpu_report
         rotate_log
     fi
     network_tick
